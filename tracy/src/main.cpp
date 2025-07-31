@@ -1,9 +1,17 @@
+// ReSharper disable once CppInconsistentNaming
+#define _CRT_SECURE_NO_WARNINGS
+
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
 #include <Windows.h>
 #include <wrl/client.h>
+
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <tiny_gltf.h>
 
 import std;
 
@@ -26,7 +34,21 @@ auto ThrowIfFailed(HRESULT const hr) -> void {
   }
 }
 
-auto main() -> int {
+auto main(int const argc, char** argv) -> int {
+  if (argc < 2) {
+    std::cerr << "Usage: " << argv[0] << " <path to glTF file>" << std::endl;
+    return -1;
+  }
+
+  tinygltf::TinyGLTF gltf_loader;
+  tinygltf::Model model;
+  std::string import_err;
+  std::string import_warn;
+
+  if (!gltf_loader.LoadBinaryFromFile(&model, &import_err, &import_warn, argv[1])) {
+    return -1;
+  }
+
   WNDCLASSW const wnd_class{
     .style = 0,
     .lpfnWndProc = &WindowProc,
