@@ -8,6 +8,8 @@
 #include <Windows.h>
 #include <wrl/client.h>
 
+#include "shaders/shader_interop.h"
+
 import std;
 
 auto ThrowIfFailed(HRESULT const hr) -> void {
@@ -138,6 +140,36 @@ auto main() -> int {
 
   ComPtr<ID3D11RenderTargetView> swap_chain_rtv;
   ThrowIfFailed(dev->CreateRenderTargetView(swap_chain_tex.Get(), &swap_chain_rtv_desc, &swap_chain_rtv));
+
+  std::array constexpr sphere_infos{
+    SphereInfo{
+      .geometry = SphereGeometry{.center_ws = {0.0F, 0.0F, 0.0F}, .radius = 1.0F},
+      .material = Material{.albedo = {1.0F, 0.0F, 0.0F}, .roughness = 0.01F, .metallic = 0.0F, .emissive = 0.0F}
+    },
+    SphereInfo{
+      .geometry = SphereGeometry{.center_ws = {2.0F, 0.0F, 0.0F}, .radius = 1.0F},
+      .material = Material{.albedo = {0.0F, 1.0F, 0.0F}, .roughness = 0.01F, .metallic = 0.0F, .emissive = 0.0F}
+    }
+  };
+
+  D3D11_BUFFER_DESC constexpr sphere_buf_desc{
+    .ByteWidth = static_cast<UINT>(sphere_infos.size() * sizeof(SphereInfo)),
+    .Usage = D3D11_USAGE_DYNAMIC,
+    .BindFlags = D3D11_BIND_SHADER_RESOURCE,
+    .CPUAccessFlags = D3D11_CPU_ACCESS_WRITE,
+    .MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,
+    .StructureByteStride = sizeof(SphereInfo)
+  };
+
+  // ReSharper disable once CppVariableCanBeMadeConstexpr
+  D3D11_SUBRESOURCE_DATA const sphere_buf_data{
+    .pSysMem = sphere_infos.data(),
+    .SysMemPitch = 0,
+    .SysMemSlicePitch = 0
+  };
+
+  ComPtr<ID3D11Buffer> sphere_buf;
+  ThrowIfFailed(dev->CreateBuffer(&sphere_buf_desc, &sphere_buf_data, &sphere_buf));
 
   ShowWindow(hwnd.get(), SW_SHOW);
 
