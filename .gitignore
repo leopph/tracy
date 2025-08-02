@@ -429,3 +429,6 @@ FodyWeavers.xsd
 
 # vcpkg files
 vcpkg_installed/
+
+# shader binary headers
+src/shaders/generated/

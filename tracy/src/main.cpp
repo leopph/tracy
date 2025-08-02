@@ -10,6 +10,14 @@
 
 #include "shaders/shader_interop.h"
 
+#ifndef NDEBUG
+#include "shaders/generated/Debug/path_trace_ps.h"
+#include "shaders/generated/Debug/path_trace_vs.h"
+#else
+#include "shaders/generated/Release/path_trace_ps.h"
+#include "shaders/generated/Release/path_trace_vs.h"
+#endif
+
 import std;
 
 auto ThrowIfFailed(HRESULT const hr) -> void {
@@ -86,15 +94,18 @@ auto main() -> int {
   d3d_device_flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
-  ComPtr<ID3D11Device> dev;
+  ComPtr<ID3D11Device> tmp_dev;
   ComPtr<ID3D11DeviceContext> ctx;
   ThrowIfFailed(D3D11CreateDevice(hp_adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, d3d_device_flags,
-                                  std::array{D3D_FEATURE_LEVEL_12_1}.data(), 1, D3D11_SDK_VERSION, &dev, nullptr,
+                                  std::array{D3D_FEATURE_LEVEL_12_1}.data(), 1, D3D11_SDK_VERSION, &tmp_dev, nullptr,
                                   &ctx));
+
+  ComPtr<ID3D11Device5> dev;
+  ThrowIfFailed(tmp_dev.As(&dev));
 
 #ifndef NDEBUG
   ComPtr<ID3D11Debug> debug;
-  ThrowIfFailed(dev.As<ID3D11Debug>(&debug));
+  ThrowIfFailed(tmp_dev.As<ID3D11Debug>(&debug));
   ComPtr<ID3D11InfoQueue> info_queue;
   ThrowIfFailed(debug.As<ID3D11InfoQueue>(&info_queue));
   ThrowIfFailed(info_queue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE));
@@ -125,7 +136,7 @@ auto main() -> int {
   };
 
   ComPtr<IDXGISwapChain1> tmp_swap_chain;
-  ThrowIfFailed(dxgi_factory->CreateSwapChainForHwnd(dev.Get(), hwnd.get(), &swap_chain_desc, nullptr, nullptr,
+  ThrowIfFailed(dxgi_factory->CreateSwapChainForHwnd(tmp_dev.Get(), hwnd.get(), &swap_chain_desc, nullptr, nullptr,
                                                      &tmp_swap_chain));
 
   ComPtr<IDXGISwapChain2> swap_chain;
@@ -138,8 +149,16 @@ auto main() -> int {
     .Format = swap_chain_format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = {.MipSlice = 0}
   };
 
+  ComPtr<ID3D11VertexShader> vertex_shader;
+  ThrowIfFailed(tmp_dev->CreateVertexShader(g_path_trace_vs_bytes, ARRAYSIZE(g_path_trace_vs_bytes), nullptr,
+                                            &vertex_shader));
+
+  ComPtr<ID3D11PixelShader> pixel_shader;
+  ThrowIfFailed(tmp_dev->CreatePixelShader(g_path_trace_ps_bytes, ARRAYSIZE(g_path_trace_ps_bytes), nullptr,
+                                           &pixel_shader));
+
   ComPtr<ID3D11RenderTargetView> swap_chain_rtv;
-  ThrowIfFailed(dev->CreateRenderTargetView(swap_chain_tex.Get(), &swap_chain_rtv_desc, &swap_chain_rtv));
+  ThrowIfFailed(tmp_dev->CreateRenderTargetView(swap_chain_tex.Get(), &swap_chain_rtv_desc, &swap_chain_rtv));
 
   std::array constexpr sphere_infos{
     SphereInfo{
@@ -169,7 +188,7 @@ auto main() -> int {
   };
 
   ComPtr<ID3D11Buffer> sphere_buf;
-  ThrowIfFailed(dev->CreateBuffer(&sphere_buf_desc, &sphere_buf_data, &sphere_buf));
+  ThrowIfFailed(tmp_dev->CreateBuffer(&sphere_buf_desc, &sphere_buf_data, &sphere_buf));
 
   ShowWindow(hwnd.get(), SW_SHOW);
 
@@ -188,7 +207,26 @@ auto main() -> int {
       DispatchMessageW(&msg);
     }
 
-    ctx->ClearRenderTargetView(swap_chain_rtv.Get(), std::array{1.0F, 0.0F, 1.0F, 1.0F}.data());
+    ctx->ClearRenderTargetView(swap_chain_rtv.Get(), std::array{0.0F, 0.0F, 0.0F, 1.0F}.data());
+    ctx->OMSetRenderTargets(1, swap_chain_rtv.GetAddressOf(), nullptr);
+
+    ctx->VSSetShader(vertex_shader.Get(), nullptr, 0);
+    ctx->PSSetShader(pixel_shader.Get(), nullptr, 0);
+
+    DXGI_SWAP_CHAIN_DESC1 cur_swap_chain_desc;
+    ThrowIfFailed(swap_chain->GetDesc1(&cur_swap_chain_desc));
+
+    D3D11_VIEWPORT const viewport{
+      .TopLeftX = 0.0F, .TopLeftY = 0.0F,
+      .Width = static_cast<FLOAT>(cur_swap_chain_desc.Width),
+      .Height = static_cast<FLOAT>(cur_swap_chain_desc.Height),
+      .MinDepth = 0.0F, .MaxDepth = 1.0F
+    };
+
+    ctx->RSSetViewports(1, &viewport);
+
+    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx->Draw(3, 0);
 
     ThrowIfFailed(swap_chain->Present(0, present_flags));
   }

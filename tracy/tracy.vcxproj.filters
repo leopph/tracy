@@ -24,4 +24,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="src\shaders\common.hlsli" />
+    <None Include="src\shaders\path_trace.hlsli" />
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="src\shaders\path_trace_vs.hlsl" />
+    <FxCompile Include="src\shaders\path_trace_ps.hlsl" />
+  </ItemGroup>
 </Project>
