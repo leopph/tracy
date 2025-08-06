@@ -105,7 +105,6 @@
     <ClInclude Include="src\shaders\shader_interop.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="src\shaders\common.hlsli" />
     <None Include="src\shaders\path_trace.hlsli" />
   </ItemGroup>
   <ItemGroup>
