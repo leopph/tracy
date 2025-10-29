@@ -5,6 +5,7 @@
 #include <DirectXMath.h>
 #include <dxgi1_4.h>
 #include <Windows.h>
+#include <wrl/client.h>
 
 #ifndef NDEBUG
 #include "generated/Debug/shader_lib.h"
@@ -19,6 +20,9 @@ extern "C" {
 __declspec(dllexport) extern UINT const D3D12SDKVersion = D3D12_SDK_VERSION;
 __declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
 }
+
+
+using Microsoft::WRL::ComPtr;
 
 
 auto ThrowIfFailed(HRESULT const hr) -> void {
@@ -441,28 +445,19 @@ ID3D12RootSignature* root_signature;
 
 
 auto InitRootSignature() -> void {
-  constexpr D3D12_DESCRIPTOR_RANGE uav_range = {
-    .RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
-    .NumDescriptors = 1,
-  };
+  CD3DX12_DESCRIPTOR_RANGE const uav_range{D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0};
 
-  D3D12_ROOT_PARAMETER const params[] = {
-    {
-      .ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-      .DescriptorTable = {.NumDescriptorRanges = 1, .pDescriptorRanges = &uav_range}
-    },
-    {
-      .ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV,
-      .Descriptor = {.ShaderRegister = 0, .RegisterSpace = 0}
-    }
-  };
+  std::array<CD3DX12_ROOT_PARAMETER, 2> root_params;
+  root_params[0].InitAsDescriptorTable(1, &uav_range);
+  root_params[1].InitAsShaderResourceView(0);
 
-  D3D12_ROOT_SIGNATURE_DESC const desc = {.NumParameters = std::size(params), .pParameters = params};
+  CD3DX12_ROOT_SIGNATURE_DESC const root_sig_desc{static_cast<UINT>(root_params.size()), root_params.data()};
 
-  ID3DBlob* blob;
-  D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, nullptr);
-  device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&root_signature));
-  blob->Release();
+  ComPtr<ID3DBlob> root_sig_blob;
+  ThrowIfFailed(D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &root_sig_blob, nullptr));
+
+  ThrowIfFailed(device->CreateRootSignature(0, root_sig_blob->GetBufferPointer(), root_sig_blob->GetBufferSize(),
+                                            IID_PPV_ARGS(&root_signature)));
 }
 
 
