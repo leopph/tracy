@@ -472,41 +472,26 @@ ID3D12Resource* shader_ids;
 
 
 auto InitPipeline() -> void {
-  D3D12_DXIL_LIBRARY_DESC constexpr lib = {
-    .DXILLibrary = {
-      .pShaderBytecode = g_shader_lib_bin,
-      .BytecodeLength = std::size(g_shader_lib_bin)
-    }
-  };
+  CD3DX12_STATE_OBJECT_DESC pso_desc{D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE};
 
-  D3D12_HIT_GROUP_DESC constexpr hit_group = {
-    .HitGroupExport = L"HitGroup",
-    .Type = D3D12_HIT_GROUP_TYPE_TRIANGLES,
-    .ClosestHitShaderImport = L"ClosestHit",
-  };
+  auto* const lib_desc = pso_desc.CreateSubobject<CD3DX12_DXIL_LIBRARY_SUBOBJECT>();
+  CD3DX12_SHADER_BYTECODE const shader_lib_code{g_shader_lib_bin, std::size(g_shader_lib_bin)};
+  lib_desc->SetDXILLibrary(&shader_lib_code);
 
-  D3D12_RAYTRACING_SHADER_CONFIG constexpr shader_config = {
-    .MaxPayloadSizeInBytes = 20, // sizeof(Payload) in HLSL
-    .MaxAttributeSizeInBytes = 8 // sizeof(attribs) in HLSL
-  };
+  auto* const hit_group_desc = pso_desc.CreateSubobject<CD3DX12_HIT_GROUP_SUBOBJECT>();
+  hit_group_desc->SetHitGroupExport(L"HitGroup");
+  hit_group_desc->SetClosestHitShaderImport(L"ClosestHit");
 
-  D3D12_GLOBAL_ROOT_SIGNATURE const global_sig = {root_signature};
+  auto* const shader_config_desc = pso_desc.CreateSubobject<CD3DX12_RAYTRACING_SHADER_CONFIG_SUBOBJECT>();
+  shader_config_desc->Config(20, 8); // sizeof(Payload), sizeof(attribs)
 
-  D3D12_RAYTRACING_PIPELINE_CONFIG constexpr pipeline_cfg = {.MaxTraceRecursionDepth = 3}; // cam->mirror->floor->light
+  auto* const global_root_sig_desc = pso_desc.CreateSubobject<CD3DX12_GLOBAL_ROOT_SIGNATURE_SUBOBJECT>();
+  global_root_sig_desc->SetRootSignature(root_signature);
 
-  D3D12_STATE_SUBOBJECT const subobjects[] = {
-    {.Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY, .pDesc = &lib},
-    {.Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP, .pDesc = &hit_group},
-    {.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, .pDesc = &shader_config},
-    {.Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE, .pDesc = &global_sig},
-    {.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG, .pDesc = &pipeline_cfg}
-  };
+  auto* const pipeline_config_desc = pso_desc.CreateSubobject<CD3DX12_RAYTRACING_PIPELINE_CONFIG_SUBOBJECT>();
+  pipeline_config_desc->Config(3); // cam->mirror->floor->light
 
-  D3D12_STATE_OBJECT_DESC const desc = {
-    .Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE, .NumSubobjects = std::size(subobjects),
-    .pSubobjects = subobjects
-  };
-  device->CreateStateObject(&desc, IID_PPV_ARGS(&pso));
+  ThrowIfFailed(device->CreateStateObject(pso_desc, IID_PPV_ARGS(&pso)));
 
   auto id_desc = BASIC_BUFFER_DESC;
   id_desc.Width = NUM_SHADER_IDS * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
