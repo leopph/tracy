@@ -21,6 +21,13 @@ __declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
 }
 
 
+auto ThrowIfFailed(HRESULT const hr) -> void {
+  if (FAILED(hr)) {
+    throw std::runtime_error{"HRESULT returned failure code."};
+  }
+}
+
+
 auto Resize(HWND hwnd) -> void;
 
 
