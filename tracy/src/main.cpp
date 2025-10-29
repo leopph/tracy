@@ -50,29 +50,8 @@ ID3D12DescriptorHeap* uav_heap;
 ID3D12CommandAllocator* cmd_alloc;
 ID3D12GraphicsCommandList4* cmd_list;
 
-constexpr float quad_vtx[] = {
-  -1, 0, -1, -1, 0, 1, 1, 0, 1,
-  -1, 0, -1, 1, 0, -1, 1, 0, 1
-};
-constexpr float cube_vtx[] = {
-  -1, -1, -1, 1, -1, -1, -1, 1, -1, 1, 1, -1,
-  -1, -1, 1, 1, -1, 1, -1, 1, 1, 1, 1, 1
-};
-constexpr short cube_idx[] = {
-  4, 6, 0, 2, 0, 6, 0, 1, 4, 5, 4, 1,
-  0, 2, 1, 3, 1, 2, 1, 3, 5, 7, 5, 3,
-  2, 6, 3, 7, 3, 6, 4, 5, 6, 7, 6, 5
-};
-
-
 constexpr UINT NUM_INSTANCES = 3;
 D3D12_RAYTRACING_INSTANCE_DESC* instance_data;
-
-ID3D12RootSignature* root_signature;
-
-ID3D12StateObject* pso;
-constexpr UINT64 NUM_SHADER_IDS = 3;
-ID3D12Resource* shader_ids;
 
 
 auto Resize(HWND hwnd) -> void;
@@ -190,6 +169,20 @@ auto main() -> int {
     res->Unmap(0, nullptr);
 
     return res;
+  };
+
+  constexpr float quad_vtx[] = {
+    -1, 0, -1, -1, 0, 1, 1, 0, 1,
+    -1, 0, -1, 1, 0, -1, 1, 0, 1
+  };
+  constexpr float cube_vtx[] = {
+    -1, -1, -1, 1, -1, -1, -1, 1, -1, 1, 1, -1,
+    -1, -1, 1, 1, -1, 1, -1, 1, 1, 1, 1, 1
+  };
+  constexpr short cube_idx[] = {
+    4, 6, 0, 2, 0, 6, 0, 1, 4, 5, 4, 1,
+    0, 2, 1, 3, 1, 2, 1, 3, 5, 7, 5, 3,
+    2, 6, 3, 7, 3, 6, 4, 5, 6, 7, 6, 5
   };
 
   auto const quad_vb = create_buffer_for(quad_vtx);
@@ -339,6 +332,7 @@ auto main() -> int {
   ComPtr<ID3DBlob> root_sig_blob;
   ThrowIfFailed(D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &root_sig_blob, nullptr));
 
+  ComPtr<ID3D12RootSignature> root_signature;
   ThrowIfFailed(device->CreateRootSignature(0, root_sig_blob->GetBufferPointer(), root_sig_blob->GetBufferSize(),
                                             IID_PPV_ARGS(&root_signature)));
 
@@ -358,18 +352,21 @@ auto main() -> int {
   shader_config_desc->Config(20, 8); // sizeof(Payload), sizeof(attribs)
 
   auto* const global_root_sig_desc = pso_desc.CreateSubobject<CD3DX12_GLOBAL_ROOT_SIGNATURE_SUBOBJECT>();
-  global_root_sig_desc->SetRootSignature(root_signature);
+  global_root_sig_desc->SetRootSignature(root_signature.Get());
 
   auto* const pipeline_config_desc = pso_desc.CreateSubobject<CD3DX12_RAYTRACING_PIPELINE_CONFIG_SUBOBJECT>();
   pipeline_config_desc->Config(3); // cam->mirror->floor->light
 
+  ComPtr<ID3D12StateObject> pso;
   ThrowIfFailed(device->CreateStateObject(pso_desc, IID_PPV_ARGS(&pso)));
 
-  auto id_desc = BASIC_BUFFER_DESC;
-  id_desc.Width = NUM_SHADER_IDS * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
-  ThrowIfFailed(device->CreateCommittedResource(&UPLOAD_HEAP, D3D12_HEAP_FLAG_NONE, &id_desc,
-                                                D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                IID_PPV_ARGS(&shader_ids)));
+  constexpr UINT64 NUM_SHADER_IDS = 3;
+  auto shader_id_buf_desc = BASIC_BUFFER_DESC;
+  shader_id_buf_desc.Width = NUM_SHADER_IDS * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+
+  ComPtr<ID3D12Resource> shader_id_buf;
+  ThrowIfFailed(device->CreateCommittedResource(&UPLOAD_HEAP, D3D12_HEAP_FLAG_NONE, &shader_id_buf_desc,
+                                                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&shader_id_buf)));
 
   {
     ComPtr<ID3D12StateObjectProperties> props;
@@ -383,11 +380,11 @@ auto main() -> int {
       data = static_cast<char*>(data) + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
     };
 
-    ThrowIfFailed(shader_ids->Map(0, nullptr, &data));
+    ThrowIfFailed(shader_id_buf->Map(0, nullptr, &data));
     write_id(L"RayGeneration");
     write_id(L"Miss");
     write_id(L"HitGroup");
-    shader_ids->Unmap(0, nullptr);
+    shader_id_buf->Unmap(0, nullptr);
   }
 
   // Main loop
@@ -434,8 +431,8 @@ auto main() -> int {
 
     // Dispatch
 
-    cmd_list->SetPipelineState1(pso);
-    cmd_list->SetComputeRootSignature(root_signature);
+    cmd_list->SetPipelineState1(pso.Get());
+    cmd_list->SetComputeRootSignature(root_signature.Get());
     cmd_list->SetDescriptorHeaps(1, &uav_heap);
     auto const uav_table = uav_heap->GetGPUDescriptorHandleForHeapStart();
     cmd_list->SetComputeRootDescriptorTable(0, uav_table);
@@ -445,15 +442,15 @@ auto main() -> int {
 
     D3D12_DISPATCH_RAYS_DESC const dispatch_desc = {
       .RayGenerationShaderRecord = {
-        .StartAddress = shader_ids->GetGPUVirtualAddress(),
+        .StartAddress = shader_id_buf->GetGPUVirtualAddress(),
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .MissShaderTable = {
-        .StartAddress = shader_ids->GetGPUVirtualAddress() + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+        .StartAddress = shader_id_buf->GetGPUVirtualAddress() + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .HitGroupTable = {
-        .StartAddress = shader_ids->GetGPUVirtualAddress() + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+        .StartAddress = shader_id_buf->GetGPUVirtualAddress() + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .Width = static_cast<UINT>(rt_desc.Width),
