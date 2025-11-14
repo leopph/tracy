@@ -1,0 +1,3 @@
+[submodule "wand"]
+	path = deps/wand
+	url = https://github.com/leopph/wand.git
