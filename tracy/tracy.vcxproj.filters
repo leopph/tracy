@@ -23,7 +23,7 @@
     <FxCompile Include="src\shader_lib.hlsl" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
     <None Include="vcpkg.json" />
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>
