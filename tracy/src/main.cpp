@@ -23,6 +23,9 @@ __declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
 }
 
 
+constexpr UINT kNumFramesInFlight{2};
+
+
 struct RenderingContext {
   ComPtr<ID3D12Device5> device;
   ComPtr<ID3D12CommandQueue> cmd_queue;
@@ -30,14 +33,13 @@ struct RenderingContext {
   ComPtr<ID3D12Resource> render_target;
   ComPtr<IDXGISwapChain3> swap_chain;
   ComPtr<ID3D12DescriptorHeap> uav_heap;
-  ComPtr<ID3D12CommandAllocator> cmd_alloc;
-  ComPtr<ID3D12GraphicsCommandList4> cmd_list;
+  std::array<ComPtr<ID3D12CommandAllocator>, kNumFramesInFlight> cmd_alloc;
+  std::array<ComPtr<ID3D12GraphicsCommandList4>, kNumFramesInFlight> cmd_list;
 
   UINT64 fence_val = 1;
 };
 
 
-constexpr UINT kNumFramesInFlight{2};
 constexpr UINT kNumInstances{3};
 constexpr DXGI_SAMPLE_DESC kNoAaDesc = {
   .Count = 1,
@@ -67,7 +69,7 @@ auto ThrowIfFailed(HRESULT const hr) -> void {
 }
 
 
-auto Flush(RenderingContext& ctx) -> void {
+auto WaitGpuIdle(RenderingContext& ctx) -> void {
   ThrowIfFailed(ctx.cmd_queue->Signal(ctx.fence.Get(), ctx.fence_val));
   ThrowIfFailed(ctx.fence->SetEventOnCompletion(ctx.fence_val++, nullptr));
 }
@@ -97,7 +99,7 @@ auto Resize(HWND const hwnd) -> void {
   auto const width = std::max<UINT>(rect.right - rect.left, 1);
   auto const height = std::max<UINT>(rect.bottom - rect.top, 1);
 
-  Flush(*ctx);
+  WaitGpuIdle(*ctx);
 
   ThrowIfFailed(ctx->swap_chain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0));
 
@@ -236,9 +238,11 @@ auto main() -> int {
 
   // Queue and command list
 
-  ThrowIfFailed(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&ctx.cmd_alloc)));
-  ThrowIfFailed(ctx.device->CreateCommandList1(0, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_FLAG_NONE,
-                                               IID_PPV_ARGS(&ctx.cmd_list)));
+  for (auto i = 0u; i < kNumFramesInFlight; i++) {
+    ThrowIfFailed(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&ctx.cmd_alloc[i])));
+    ThrowIfFailed(ctx.device->CreateCommandList1(0, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_FLAG_NONE,
+                                                 IID_PPV_ARGS(&ctx.cmd_list[i])));
+  }
 
   // Init meshes
 
@@ -307,15 +311,15 @@ auto main() -> int {
       .ScratchAccelerationStructureData = scratch->GetGPUVirtualAddress()
     };
 
-    ThrowIfFailed(ctx.cmd_alloc->Reset());
-    ThrowIfFailed(ctx.cmd_list->Reset(ctx.cmd_alloc.Get(), nullptr));
+    ThrowIfFailed(ctx.cmd_alloc[0]->Reset());
+    ThrowIfFailed(ctx.cmd_list[0]->Reset(ctx.cmd_alloc[0].Get(), nullptr));
 
-    ctx.cmd_list->BuildRaytracingAccelerationStructure(&build_desc, 0, nullptr);
+    ctx.cmd_list[0]->BuildRaytracingAccelerationStructure(&build_desc, 0, nullptr);
 
-    ThrowIfFailed(ctx.cmd_list->Close());
-    ctx.cmd_queue->ExecuteCommandLists(1, CommandListCast(ctx.cmd_list.GetAddressOf()));
+    ThrowIfFailed(ctx.cmd_list[0]->Close());
+    ctx.cmd_queue->ExecuteCommandLists(1, CommandListCast(ctx.cmd_list[0].GetAddressOf()));
 
-    Flush(ctx);
+    WaitGpuIdle(ctx);
 
     return as;
   };
@@ -486,7 +490,7 @@ auto main() -> int {
   for (MSG msg;;) {
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
       if (msg.message == WM_QUIT) {
-        Flush(ctx);
+        WaitGpuIdle(ctx);
         SetWindowLongPtrW(hwnd.get(), GWLP_USERDATA, 0);
         return 0;
       }
@@ -497,8 +501,8 @@ auto main() -> int {
 
     auto const frame_idx = frame_count % kNumFramesInFlight;
 
-    ThrowIfFailed(ctx.cmd_alloc->Reset());
-    ThrowIfFailed(ctx.cmd_list->Reset(ctx.cmd_alloc.Get(), nullptr));
+    ThrowIfFailed(ctx.cmd_alloc[frame_idx]->Reset());
+    ThrowIfFailed(ctx.cmd_list[frame_idx]->Reset(ctx.cmd_alloc[frame_idx].Get(), nullptr));
 
     // Update scene transforms
 
@@ -519,22 +523,22 @@ auto main() -> int {
       .ScratchAccelerationStructureData = tlas_update_scratch->GetGPUVirtualAddress()
     };
 
-    ctx.cmd_list->BuildRaytracingAccelerationStructure(&tlas_update_desc, 0, nullptr);
+    ctx.cmd_list[frame_idx]->BuildRaytracingAccelerationStructure(&tlas_update_desc, 0, nullptr);
 
     D3D12_RESOURCE_BARRIER const tlas_uav_barrier{
       .Type = D3D12_RESOURCE_BARRIER_TYPE_UAV, .UAV = {.pResource = tlas.Get()}
     };
 
-    ctx.cmd_list->ResourceBarrier(1, &tlas_uav_barrier);
+    ctx.cmd_list[frame_idx]->ResourceBarrier(1, &tlas_uav_barrier);
 
     // Dispatch
 
-    ctx.cmd_list->SetPipelineState1(pso.Get());
-    ctx.cmd_list->SetComputeRootSignature(root_signature.Get());
-    ctx.cmd_list->SetDescriptorHeaps(1, ctx.uav_heap.GetAddressOf());
+    ctx.cmd_list[frame_idx]->SetPipelineState1(pso.Get());
+    ctx.cmd_list[frame_idx]->SetComputeRootSignature(root_signature.Get());
+    ctx.cmd_list[frame_idx]->SetDescriptorHeaps(1, ctx.uav_heap.GetAddressOf());
     auto const uav_table = ctx.uav_heap->GetGPUDescriptorHandleForHeapStart();
-    ctx.cmd_list->SetComputeRootDescriptorTable(0, uav_table);
-    ctx.cmd_list->SetComputeRootShaderResourceView(1, tlas->GetGPUVirtualAddress());
+    ctx.cmd_list[frame_idx]->SetComputeRootDescriptorTable(0, uav_table);
+    ctx.cmd_list[frame_idx]->SetComputeRootShaderResourceView(1, tlas->GetGPUVirtualAddress());
 
     auto const rt_desc = ctx.render_target->GetDesc();
 
@@ -556,13 +560,13 @@ auto main() -> int {
       .Depth = 1
     };
 
-    ctx.cmd_list->DispatchRays(&dispatch_desc);
+    ctx.cmd_list[frame_idx]->DispatchRays(&dispatch_desc);
 
     {
       ComPtr<ID3D12Resource> back_buffer;
       ThrowIfFailed(ctx.swap_chain->GetBuffer(ctx.swap_chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back_buffer)));
 
-      auto const rt_barrier = [&ctx](auto* const resource, auto const before, auto const after) {
+      auto const rt_barrier = [&ctx, frame_idx](auto* const resource, auto const before, auto const after) {
         D3D12_RESOURCE_BARRIER const rb = {
           .Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
           .Transition = {
@@ -571,22 +575,25 @@ auto main() -> int {
             .StateAfter = after
           }
         };
-        ctx.cmd_list->ResourceBarrier(1, &rb);
+        ctx.cmd_list[frame_idx]->ResourceBarrier(1, &rb);
       };
 
       rt_barrier(ctx.render_target.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
       rt_barrier(back_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
 
-      ctx.cmd_list->CopyResource(back_buffer.Get(), ctx.render_target.Get());
+      ctx.cmd_list[frame_idx]->CopyResource(back_buffer.Get(), ctx.render_target.Get());
 
       rt_barrier(back_buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
       rt_barrier(ctx.render_target.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
 
-    ThrowIfFailed(ctx.cmd_list->Close());
-    ctx.cmd_queue->ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(ctx.cmd_list.GetAddressOf()));
+    ThrowIfFailed(ctx.cmd_list[frame_idx]->Close());
+    ctx.cmd_queue->
+        ExecuteCommandLists(1, reinterpret_cast<ID3D12CommandList**>(ctx.cmd_list[frame_idx].GetAddressOf()));
 
-    Flush(ctx);
+    ThrowIfFailed(ctx.cmd_queue->Signal(ctx.fence.Get(), ctx.fence_val));
+    ++ctx.fence_val;
+    ThrowIfFailed(ctx.fence->SetEventOnCompletion(ctx.fence_val - kNumFramesInFlight, nullptr));
 
     ThrowIfFailed(ctx.swap_chain->Present(1, 0));
 
