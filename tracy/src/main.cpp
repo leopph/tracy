@@ -32,6 +32,8 @@ struct RenderingContext {
   ComPtr<ID3D12DescriptorHeap> uav_heap;
   ComPtr<ID3D12CommandAllocator> cmd_alloc;
   ComPtr<ID3D12GraphicsCommandList4> cmd_list;
+
+  UINT64 fence_val = 1;
 };
 
 
@@ -58,11 +60,24 @@ constexpr D3D12_RESOURCE_DESC kBasicBufferDesc{
 };
 
 
-auto Flush(RenderingContext const& ctx) -> void {
-  static UINT64 value = 1;
-  ctx.cmd_queue->Signal(ctx.fence.Get(), value);
-  ctx.fence->SetEventOnCompletion(value++, nullptr);
+auto ThrowIfFailed(HRESULT const hr) -> void {
+  if (FAILED(hr)) {
+    throw std::runtime_error{"HRESULT returned failure code."};
+  }
 }
+
+
+auto Flush(RenderingContext& ctx) -> void {
+  ThrowIfFailed(ctx.cmd_queue->Signal(ctx.fence.Get(), ctx.fence_val));
+  ThrowIfFailed(ctx.fence->SetEventOnCompletion(ctx.fence_val++, nullptr));
+}
+
+
+struct HwndDeleter {
+  auto operator()(HWND const hwnd) const -> void {
+    DestroyWindow(hwnd);
+  }
+};
 
 
 auto Resize(HWND const hwnd) -> void {
@@ -84,11 +99,7 @@ auto Resize(HWND const hwnd) -> void {
 
   Flush(*ctx);
 
-  ctx->swap_chain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-
-  if (ctx->render_target) [[likely]] {
-    ctx->render_target->Release();
-  }
+  ThrowIfFailed(ctx->swap_chain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0));
 
   D3D12_RESOURCE_DESC const rt_desc = {
     .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -100,9 +111,9 @@ auto Resize(HWND const hwnd) -> void {
     .SampleDesc = kNoAaDesc,
     .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
   };
-  ctx->device->CreateCommittedResource(&kDefaultHeapProps, D3D12_HEAP_FLAG_NONE, &rt_desc,
-                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                       nullptr, IID_PPV_ARGS(&ctx->render_target));
+  ThrowIfFailed(ctx->device->CreateCommittedResource(&kDefaultHeapProps, D3D12_HEAP_FLAG_NONE, &rt_desc,
+                                                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                                     nullptr, IID_PPV_ARGS(&ctx->render_target)));
 
   constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
     .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -115,7 +126,7 @@ auto Resize(HWND const hwnd) -> void {
 
 auto UpdateTransforms(D3D12_RAYTRACING_INSTANCE_DESC* const instance_data) -> void {
   using namespace DirectX;
-  auto const set = [instance_data](int const idx, XMMATRIX const mx) {
+  auto const set = [instance_data](int const idx, XMMATRIX const& mx) {
     auto* const ptr = reinterpret_cast<XMFLOAT3X4*>(&instance_data[idx].Transform);
     XMStoreFloat3x4(ptr, mx);
   };
@@ -137,24 +148,15 @@ auto UpdateTransforms(D3D12_RAYTRACING_INSTANCE_DESC* const instance_data) -> vo
 }
 
 
-auto ThrowIfFailed(HRESULT const hr) -> void {
-  if (FAILED(hr)) {
-    throw std::runtime_error{"HRESULT returned failure code."};
-  }
-}
-
-
 auto WINAPI WndProc(HWND const hwnd, UINT const msg, WPARAM const wparam, LPARAM const lparam) -> LRESULT {
   switch (msg) {
-  case WM_CLOSE:
-  case WM_DESTROY: {
+  case WM_CLOSE: {
     PostQuitMessage(0);
-    [[fallthrough]];
+    return 0;
   }
-  case WM_SIZING:
   case WM_SIZE: {
     Resize(hwnd);
-    [[fallthrough]];
+    return 0;
   }
   default: {
     return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -175,15 +177,15 @@ auto main() -> int {
 
   RegisterClassW(&wcw);
 
-  auto const hwnd = CreateWindowExW(
-    0, wcw.lpszClassName, L"DXR tutorial", WS_VISIBLE | WS_OVERLAPPEDWINDOW,
-    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-    nullptr, nullptr, nullptr, nullptr);
+  auto const hwnd = std::unique_ptr<std::remove_pointer_t<HWND>, HwndDeleter>{
+    CreateWindowExW(0, wcw.lpszClassName, L"DXR tutorial", WS_VISIBLE | WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,
+                    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, nullptr, nullptr)
+  };
 
   // Create rendering context
 
   RenderingContext ctx;
-  SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&ctx));
+  SetWindowLongPtrW(hwnd.get(), GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&ctx));
 
   // Create D3D12 device
 
@@ -215,7 +217,8 @@ auto main() -> int {
     };
 
     ComPtr<IDXGISwapChain1> swap_chain1;
-    ThrowIfFailed(factory->CreateSwapChainForHwnd(ctx.cmd_queue.Get(), hwnd, &sc_desc, nullptr, nullptr, &swap_chain1));
+    ThrowIfFailed(factory->CreateSwapChainForHwnd(ctx.cmd_queue.Get(), hwnd.get(), &sc_desc, nullptr, nullptr,
+                                                  &swap_chain1));
     ThrowIfFailed(swap_chain1->QueryInterface(IID_PPV_ARGS(&ctx.swap_chain)));
   }
 
@@ -229,7 +232,7 @@ auto main() -> int {
 
   ThrowIfFailed(ctx.device->CreateDescriptorHeap(&uav_heap_desc, IID_PPV_ARGS(&ctx.uav_heap)));
 
-  Resize(hwnd);
+  Resize(hwnd.get());
 
   // Queue and command list
 
@@ -382,11 +385,11 @@ auto main() -> int {
     ThrowIfFailed(instance_bufs[i]->Map(0, nullptr, reinterpret_cast<void**>(&instance_data[i])));
 
     for (UINT j = 0; j < kNumInstances; j++) {
-        instance_data[i][j] = {
-          .InstanceID = j,
-          .InstanceMask = 1,
-          .AccelerationStructure = (j ? quad_blas : cube_blas)->GetGPUVirtualAddress()
-        };
+      instance_data[i][j] = {
+        .InstanceID = j,
+        .InstanceMask = 1,
+        .AccelerationStructure = (j ? quad_blas : cube_blas)->GetGPUVirtualAddress()
+      };
     }
   }
 
@@ -483,7 +486,8 @@ auto main() -> int {
   for (MSG msg;;) {
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
       if (msg.message == WM_QUIT) {
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        Flush(ctx);
+        SetWindowLongPtrW(hwnd.get(), GWLP_USERDATA, 0);
         return 0;
       }
 
