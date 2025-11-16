@@ -455,37 +455,40 @@ auto main() -> int {
   ComPtr<ID3D12StateObject> pso;
   ThrowIfFailed(ctx.device->CreateStateObject(pso_desc, IID_PPV_ARGS(&pso)));
 
-  constexpr UINT64 NUM_SHADER_IDS = 3;
-  auto shader_id_buf_desc = kBasicBufferDesc;
-  shader_id_buf_desc.Width = NUM_SHADER_IDS * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+  // Create shader table
 
-  ComPtr<ID3D12Resource> shader_id_buf;
+  constexpr UINT64 kShaderTableSize{3}; // 1 raygen + 1 miss + 1 hitgroup
+  auto shader_id_buf_desc = kBasicBufferDesc;
+  shader_id_buf_desc.Width = kShaderTableSize * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+
+  ComPtr<ID3D12Resource> shader_table;
   ThrowIfFailed(ctx.device->CreateCommittedResource(&kUploadHeapProps, D3D12_HEAP_FLAG_NONE, &shader_id_buf_desc,
                                                     D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                    IID_PPV_ARGS(&shader_id_buf)));
+                                                    IID_PPV_ARGS(&shader_table)));
 
   {
-    ComPtr<ID3D12StateObjectProperties> props;
-    ThrowIfFailed(pso->QueryInterface(IID_PPV_ARGS(&props)));
+    ComPtr<ID3D12StateObjectProperties> pso_props;
+    ThrowIfFailed(pso->QueryInterface(IID_PPV_ARGS(&pso_props)));
 
-    void* data;
+    void* shader_table_data;
+    ThrowIfFailed(shader_table->Map(0, nullptr, &shader_table_data));
 
     auto const write_id = [&](wchar_t const* const name) {
-      auto const* const id = props->GetShaderIdentifier(name);
-      std::memcpy(data, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-      data = static_cast<char*>(data) + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+      auto const* const id = pso_props->GetShaderIdentifier(name);
+      std::memcpy(shader_table_data, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+      shader_table_data = static_cast<char*>(shader_table_data) + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
     };
 
-    ThrowIfFailed(shader_id_buf->Map(0, nullptr, &data));
     write_id(L"RayGeneration");
     write_id(L"Miss");
     write_id(L"HitGroup");
-    shader_id_buf->Unmap(0, nullptr);
+
+    shader_table->Unmap(0, nullptr);
   }
 
-  UINT frame_count{0};
-
   // Main loop
+
+  UINT frame_count{0};
 
   for (MSG msg;;) {
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -544,15 +547,15 @@ auto main() -> int {
 
     D3D12_DISPATCH_RAYS_DESC const dispatch_desc = {
       .RayGenerationShaderRecord = {
-        .StartAddress = shader_id_buf->GetGPUVirtualAddress(),
+        .StartAddress = shader_table->GetGPUVirtualAddress(),
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .MissShaderTable = {
-        .StartAddress = shader_id_buf->GetGPUVirtualAddress() + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+        .StartAddress = shader_table->GetGPUVirtualAddress() + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .HitGroupTable = {
-        .StartAddress = shader_id_buf->GetGPUVirtualAddress() + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+        .StartAddress = shader_table->GetGPUVirtualAddress() + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .Width = static_cast<UINT>(rt_desc.Width),
