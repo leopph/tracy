@@ -22,6 +22,7 @@ __declspec(dllexport) extern UINT const D3D12SDKVersion = D3D12_SDK_VERSION;
 __declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
 }
 
+
 struct RenderingContext {
   ComPtr<ID3D12Device5> device;
   ComPtr<ID3D12CommandQueue> cmd_queue;
@@ -31,30 +32,109 @@ struct RenderingContext {
   ComPtr<ID3D12DescriptorHeap> uav_heap;
   ComPtr<ID3D12CommandAllocator> cmd_alloc;
   ComPtr<ID3D12GraphicsCommandList4> cmd_list;
-
-  D3D12_RAYTRACING_INSTANCE_DESC* instance_data;
 };
 
 
-constexpr DXGI_SAMPLE_DESC NO_AA = {.Count = 1, .Quality = 0};
-constexpr D3D12_HEAP_PROPERTIES UPLOAD_HEAP = {.Type = D3D12_HEAP_TYPE_UPLOAD};
-constexpr D3D12_HEAP_PROPERTIES DEFAULT_HEAP = {.Type = D3D12_HEAP_TYPE_DEFAULT};
-constexpr D3D12_RESOURCE_DESC BASIC_BUFFER_DESC = {
+constexpr UINT kNumFramesInFlight{2};
+constexpr UINT kNumInstances{3};
+constexpr DXGI_SAMPLE_DESC kNoAaDesc = {
+  .Count = 1,
+  .Quality = 0
+};
+constexpr D3D12_HEAP_PROPERTIES kUploadHeapProps{
+  .Type = D3D12_HEAP_TYPE_UPLOAD
+};
+constexpr D3D12_HEAP_PROPERTIES kDefaultHeapProps{
+  .Type = D3D12_HEAP_TYPE_DEFAULT
+};
+constexpr D3D12_RESOURCE_DESC kBasicBufferDesc{
   .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
   .Width = 0,
   .Height = 1,
   .DepthOrArraySize = 1,
   .MipLevels = 1,
-  .SampleDesc = NO_AA,
+  .SampleDesc = kNoAaDesc,
   .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
 };
 
-constexpr UINT NUM_INSTANCES = 3;
+
+auto Flush(RenderingContext const& ctx) -> void {
+  static UINT64 value = 1;
+  ctx.cmd_queue->Signal(ctx.fence.Get(), value);
+  ctx.fence->SetEventOnCompletion(value++, nullptr);
+}
 
 
-auto Resize(HWND hwnd) -> void;
-auto Flush(RenderingContext const& ctx) -> void;
-auto UpdateTransforms(RenderingContext& ctx) -> void;
+auto Resize(HWND const hwnd) -> void {
+  auto* const ctx = reinterpret_cast<RenderingContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+  if (!ctx) [[unlikely]] {
+    return;
+  }
+
+  if (!ctx->swap_chain) [[unlikely]] {
+    return;
+  }
+
+  RECT rect;
+  GetClientRect(hwnd, &rect);
+
+  auto const width = std::max<UINT>(rect.right - rect.left, 1);
+  auto const height = std::max<UINT>(rect.bottom - rect.top, 1);
+
+  Flush(*ctx);
+
+  ctx->swap_chain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+
+  if (ctx->render_target) [[likely]] {
+    ctx->render_target->Release();
+  }
+
+  D3D12_RESOURCE_DESC const rt_desc = {
+    .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+    .Width = width,
+    .Height = height,
+    .DepthOrArraySize = 1,
+    .MipLevels = 1,
+    .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+    .SampleDesc = kNoAaDesc,
+    .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+  };
+  ctx->device->CreateCommittedResource(&kDefaultHeapProps, D3D12_HEAP_FLAG_NONE, &rt_desc,
+                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                       nullptr, IID_PPV_ARGS(&ctx->render_target));
+
+  constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
+    .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D
+  };
+  ctx->device->CreateUnorderedAccessView(ctx->render_target.Get(), nullptr, &uav_desc,
+                                         ctx->uav_heap->GetCPUDescriptorHandleForHeapStart());
+}
+
+
+auto UpdateTransforms(D3D12_RAYTRACING_INSTANCE_DESC* const instance_data) -> void {
+  using namespace DirectX;
+  auto const set = [instance_data](int const idx, XMMATRIX const mx) {
+    auto* const ptr = reinterpret_cast<XMFLOAT3X4*>(&instance_data[idx].Transform);
+    XMStoreFloat3x4(ptr, mx);
+  };
+
+  auto const time = static_cast<float>(GetTickCount64()) / 1000.0f;
+
+  auto cube = XMMatrixRotationRollPitchYaw(time / 2, time / 3, time / 5);
+  cube *= XMMatrixTranslation(-1.5, 2, 2);
+  set(0, cube);
+
+  auto mirror = XMMatrixRotationX(-1.8f);
+  mirror *= XMMatrixRotationY(XMScalarSinEst(time) / 8 + 1);
+  mirror *= XMMatrixTranslation(2, 2, 2);
+  set(1, mirror);
+
+  auto floor = XMMatrixScaling(5, 5, 5);
+  floor *= XMMatrixTranslation(0, 0, 2);
+  set(2, floor);
+}
 
 
 auto ThrowIfFailed(HRESULT const hr) -> void {
@@ -129,7 +209,7 @@ auto main() -> int {
 
     constexpr DXGI_SWAP_CHAIN_DESC1 sc_desc = {
       .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-      .SampleDesc = NO_AA,
+      .SampleDesc = kNoAaDesc,
       .BufferCount = 2,
       .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
     };
@@ -160,11 +240,11 @@ auto main() -> int {
   // Init meshes
 
   auto const create_buffer_for = [&ctx](auto& data) {
-    auto desc = BASIC_BUFFER_DESC;
+    auto desc = kBasicBufferDesc;
     desc.Width = sizeof(data);
 
     ComPtr<ID3D12Resource> res;
-    ThrowIfFailed(ctx.device->CreateCommittedResource(&UPLOAD_HEAP, D3D12_HEAP_FLAG_NONE, &desc,
+    ThrowIfFailed(ctx.device->CreateCommittedResource(&kUploadHeapProps, D3D12_HEAP_FLAG_NONE, &desc,
                                                       D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res)));
     void* ptr;
     ThrowIfFailed(res->Map(0, nullptr, &ptr));
@@ -197,12 +277,12 @@ auto main() -> int {
   auto const make_as = [&ctx](D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const& inputs,
                               UINT64* update_scratch_size = nullptr) {
     auto const make_buffer = [&ctx](UINT64 const size, auto const initial_state) {
-      auto desc = BASIC_BUFFER_DESC;
+      auto desc = kBasicBufferDesc;
       desc.Width = size;
       desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
       ComPtr<ID3D12Resource> buffer;
-      ctx.device->CreateCommittedResource(&DEFAULT_HEAP, D3D12_HEAP_FLAG_NONE, &desc, initial_state, nullptr,
+      ctx.device->CreateCommittedResource(&kDefaultHeapProps, D3D12_HEAP_FLAG_NONE, &desc, initial_state, nullptr,
                                           IID_PPV_ARGS(&buffer));
       return buffer;
     };
@@ -288,37 +368,42 @@ auto main() -> int {
 
   // Init scene
 
-  auto instance_buf_desc = BASIC_BUFFER_DESC;
-  instance_buf_desc.Width = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * NUM_INSTANCES;
+  auto instance_buf_desc = kBasicBufferDesc;
+  instance_buf_desc.Width = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * kNumInstances;
 
-  ComPtr<ID3D12Resource> instance_buf;
-  ThrowIfFailed(ctx.device->CreateCommittedResource(&UPLOAD_HEAP, D3D12_HEAP_FLAG_NONE, &instance_buf_desc,
-                                                    D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&instance_buf)));
+  std::array<ComPtr<ID3D12Resource>, kNumFramesInFlight> instance_bufs;
+  std::array<D3D12_RAYTRACING_INSTANCE_DESC*, kNumFramesInFlight> instance_data;
 
-  ThrowIfFailed(instance_buf->Map(0, nullptr, reinterpret_cast<void**>(&ctx.instance_data)));
+  for (auto i = 0u; i < kNumFramesInFlight; i++) {
+    ThrowIfFailed(ctx.device->CreateCommittedResource(&kUploadHeapProps, D3D12_HEAP_FLAG_NONE, &instance_buf_desc,
+                                                      D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                      IID_PPV_ARGS(&instance_bufs[i])));
 
-  for (UINT i = 0; i < NUM_INSTANCES; i++) {
-    ctx.instance_data[i] = {
-      .InstanceID = i,
-      .InstanceMask = 1,
-      .AccelerationStructure = (i ? quad_blas : cube_blas)->GetGPUVirtualAddress()
-    };
+    ThrowIfFailed(instance_bufs[i]->Map(0, nullptr, reinterpret_cast<void**>(&instance_data[i])));
+
+    for (UINT j = 0; j < kNumInstances; j++) {
+        instance_data[i][j] = {
+          .InstanceID = j,
+          .InstanceMask = 1,
+          .AccelerationStructure = (j ? quad_blas : cube_blas)->GetGPUVirtualAddress()
+        };
+    }
   }
 
-  UpdateTransforms(ctx);
+  UpdateTransforms(instance_data[0]);
 
   // TLAS for scene
 
   UINT64 update_scratch_size;
-  auto const tlas = make_tlas(instance_buf.Get(), NUM_INSTANCES, &update_scratch_size);
+  auto const tlas = make_tlas(instance_bufs[0].Get(), kNumInstances, &update_scratch_size);
 
-  auto tlas_update_scratch_desc = BASIC_BUFFER_DESC;
+  auto tlas_update_scratch_desc = kBasicBufferDesc;
   // WARP bug workaround: use 8 if the required size was reported as less
   tlas_update_scratch_desc.Width = std::max<UINT64>(update_scratch_size, 8ull);
   tlas_update_scratch_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
   ComPtr<ID3D12Resource> tlas_update_scratch;
-  ThrowIfFailed(ctx.device->CreateCommittedResource(&DEFAULT_HEAP, D3D12_HEAP_FLAG_NONE, &tlas_update_scratch_desc,
+  ThrowIfFailed(ctx.device->CreateCommittedResource(&kDefaultHeapProps, D3D12_HEAP_FLAG_NONE, &tlas_update_scratch_desc,
                                                     D3D12_RESOURCE_STATE_COMMON, nullptr,
                                                     IID_PPV_ARGS(&tlas_update_scratch)));
 
@@ -364,11 +449,11 @@ auto main() -> int {
   ThrowIfFailed(ctx.device->CreateStateObject(pso_desc, IID_PPV_ARGS(&pso)));
 
   constexpr UINT64 NUM_SHADER_IDS = 3;
-  auto shader_id_buf_desc = BASIC_BUFFER_DESC;
+  auto shader_id_buf_desc = kBasicBufferDesc;
   shader_id_buf_desc.Width = NUM_SHADER_IDS * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
 
   ComPtr<ID3D12Resource> shader_id_buf;
-  ThrowIfFailed(ctx.device->CreateCommittedResource(&UPLOAD_HEAP, D3D12_HEAP_FLAG_NONE, &shader_id_buf_desc,
+  ThrowIfFailed(ctx.device->CreateCommittedResource(&kUploadHeapProps, D3D12_HEAP_FLAG_NONE, &shader_id_buf_desc,
                                                     D3D12_RESOURCE_STATE_COMMON, nullptr,
                                                     IID_PPV_ARGS(&shader_id_buf)));
 
@@ -391,6 +476,8 @@ auto main() -> int {
     shader_id_buf->Unmap(0, nullptr);
   }
 
+  UINT frame_count{0};
+
   // Main loop
 
   for (MSG msg;;) {
@@ -404,12 +491,14 @@ auto main() -> int {
       DispatchMessageW(&msg);
     }
 
+    auto const frame_idx = frame_count % kNumFramesInFlight;
+
     ThrowIfFailed(ctx.cmd_alloc->Reset());
     ThrowIfFailed(ctx.cmd_list->Reset(ctx.cmd_alloc.Get(), nullptr));
 
     // Update scene transforms
 
-    UpdateTransforms(ctx);
+    UpdateTransforms(instance_data[frame_idx]);
 
     // Update TLAS
 
@@ -418,9 +507,9 @@ auto main() -> int {
       .Inputs = {
         .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
         .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE,
-        .NumDescs = NUM_INSTANCES,
+        .NumDescs = kNumInstances,
         .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-        .InstanceDescs = instance_buf->GetGPUVirtualAddress()
+        .InstanceDescs = instance_bufs[frame_idx]->GetGPUVirtualAddress()
       },
       .SourceAccelerationStructureData = tlas->GetGPUVirtualAddress(),
       .ScratchAccelerationStructureData = tlas_update_scratch->GetGPUVirtualAddress()
@@ -496,84 +585,7 @@ auto main() -> int {
     Flush(ctx);
 
     ThrowIfFailed(ctx.swap_chain->Present(1, 0));
+
+    ++frame_count;
   }
-}
-
-
-auto Resize(HWND const hwnd) -> void {
-  auto* const ctx = reinterpret_cast<RenderingContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-
-  if (!ctx) [[unlikely]] {
-    return;
-  }
-
-  if (!ctx->swap_chain) [[unlikely]] {
-    return;
-  }
-
-  RECT rect;
-  GetClientRect(hwnd, &rect);
-
-  auto const width = std::max<UINT>(rect.right - rect.left, 1);
-  auto const height = std::max<UINT>(rect.bottom - rect.top, 1);
-
-  Flush(*ctx);
-
-  ctx->swap_chain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-
-  if (ctx->render_target) [[likely]] {
-    ctx->render_target->Release();
-  }
-
-  D3D12_RESOURCE_DESC const rt_desc = {
-    .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-    .Width = width,
-    .Height = height,
-    .DepthOrArraySize = 1,
-    .MipLevels = 1,
-    .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-    .SampleDesc = NO_AA,
-    .Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
-  };
-  ctx->device->CreateCommittedResource(&DEFAULT_HEAP, D3D12_HEAP_FLAG_NONE, &rt_desc,
-                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                                       nullptr, IID_PPV_ARGS(&ctx->render_target));
-
-  constexpr D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
-    .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-    .ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D
-  };
-  ctx->device->CreateUnorderedAccessView(ctx->render_target.Get(), nullptr, &uav_desc,
-                                         ctx->uav_heap->GetCPUDescriptorHandleForHeapStart());
-}
-
-
-auto Flush(RenderingContext const& ctx) -> void {
-  static UINT64 value = 1;
-  ctx.cmd_queue->Signal(ctx.fence.Get(), value);
-  ctx.fence->SetEventOnCompletion(value++, nullptr);
-}
-
-
-auto UpdateTransforms(RenderingContext& ctx) -> void {
-  using namespace DirectX;
-  auto const set = [&ctx](int const idx, XMMATRIX const mx) {
-    auto* const ptr = reinterpret_cast<XMFLOAT3X4*>(&ctx.instance_data[idx].Transform);
-    XMStoreFloat3x4(ptr, mx);
-  };
-
-  auto const time = static_cast<float>(GetTickCount64()) / 1000.0f;
-
-  auto cube = XMMatrixRotationRollPitchYaw(time / 2, time / 3, time / 5);
-  cube *= XMMatrixTranslation(-1.5, 2, 2);
-  set(0, cube);
-
-  auto mirror = XMMatrixRotationX(-1.8f);
-  mirror *= XMMatrixRotationY(XMScalarSinEst(time) / 8 + 1);
-  mirror *= XMMatrixTranslation(2, 2, 2);
-  set(1, mirror);
-
-  auto floor = XMMatrixScaling(5, 5, 5);
-  floor *= XMMatrixTranslation(0, 0, 2);
-  set(2, floor);
 }
