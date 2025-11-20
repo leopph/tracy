@@ -23,6 +23,10 @@ __declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
 }
 
 
+template<unsigned N>
+using Vector = std::array<float, N>;
+
+
 constexpr UINT kNumFramesInFlight{2};
 
 
@@ -246,7 +250,7 @@ auto main() -> int {
 
   // Init meshes
 
-  auto const create_buffer_for = [&ctx](auto& data) {
+  auto const create_buffer_for = [&ctx](auto const& data) {
     auto desc = kBasicBufferDesc;
     desc.Width = sizeof(data);
 
@@ -255,29 +259,31 @@ auto main() -> int {
                                                       D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res)));
     void* ptr;
     ThrowIfFailed(res->Map(0, nullptr, &ptr));
-    std::memcpy(ptr, data, sizeof(data));
+    std::memcpy(ptr, &data, sizeof(data));
     res->Unmap(0, nullptr);
 
     return res;
   };
 
-  constexpr float quad_vtx[] = {
-    -1, 0, -1, -1, 0, 1, 1, 0, 1,
-    -1, 0, -1, 1, 0, -1, 1, 0, 1
-  };
-  constexpr float cube_vtx[] = {
-    -1, -1, -1, 1, -1, -1, -1, 1, -1, 1, 1, -1,
-    -1, -1, 1, 1, -1, 1, -1, 1, 1, 1, 1, 1
-  };
-  constexpr short cube_idx[] = {
-    4, 6, 0, 2, 0, 6, 0, 1, 4, 5, 4, 1,
-    0, 2, 1, 3, 1, 2, 1, 3, 5, 7, 5, 3,
-    2, 6, 3, 7, 3, 6, 4, 5, 6, 7, 6, 5
+  constexpr std::array quad_vertices{
+    Vector<3>{-1, 0, -1}, Vector<3>{-1, 0, 1}, Vector<3>{1, 0, 1},
+    Vector<3>{-1, 0, -1}, Vector<3>{1, 0, -1}, Vector<3>{1, 0, 1}
   };
 
-  auto const quad_vb = create_buffer_for(quad_vtx);
-  auto const cube_vb = create_buffer_for(cube_vtx);
-  auto const cube_ib = create_buffer_for(cube_idx);
+  constexpr std::array cube_vertices{
+    Vector<3>{-1, -1, -1}, Vector<3>{1, -1, -1}, Vector<3>{-1, 1, -1}, Vector<3>{1, 1, -1},
+    Vector<3>{-1, -1, 1}, Vector<3>{1, -1, 1}, Vector<3>{-1, 1, 1}, Vector<3>{1, 1, 1}
+  };
+
+  constexpr std::array cube_indices{
+    4u, 6u, 0u, 2u, 0u, 6u, 0u, 1u, 4u, 5u, 4u, 1u,
+    0u, 2u, 1u, 3u, 1u, 2u, 1u, 3u, 5u, 7u, 5u, 3u,
+    2u, 6u, 3u, 7u, 3u, 6u, 4u, 5u, 6u, 7u, 6u, 5u
+  };
+
+  auto const quad_vb = create_buffer_for(quad_vertices);
+  auto const cube_vb = create_buffer_for(cube_vertices);
+  auto const cube_ib = create_buffer_for(cube_indices);
 
   // AS utilities
 
@@ -324,18 +330,18 @@ auto main() -> int {
     return as;
   };
 
-  auto const make_blas = [make_as](ID3D12Resource* const vertex_buffer, UINT const vertex_floats,
+  auto const make_blas = [make_as](ID3D12Resource* const vertex_buffer, UINT const vtx_count,
                                    ID3D12Resource* const index_buffer = nullptr,
-                                   UINT const indices = 0) {
+                                   UINT const idx_count = 0) {
     D3D12_RAYTRACING_GEOMETRY_DESC const geometry_desc = {
       .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
       .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
       .Triangles = {
         .Transform3x4 = 0,
-        .IndexFormat = index_buffer ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_UNKNOWN,
+        .IndexFormat = index_buffer ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_UNKNOWN,
         .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-        .IndexCount = indices,
-        .VertexCount = vertex_floats / 3,
+        .IndexCount = idx_count,
+        .VertexCount = vtx_count,
         .IndexBuffer = index_buffer ? index_buffer->GetGPUVirtualAddress() : 0,
         .VertexBuffer = {
           .StartAddress = vertex_buffer->GetGPUVirtualAddress(),
@@ -370,8 +376,8 @@ auto main() -> int {
 
   // BLAS for meshes
 
-  auto const quad_blas = make_blas(quad_vb.Get(), std::size(quad_vtx));
-  auto const cube_blas = make_blas(cube_vb.Get(), std::size(cube_vtx), cube_ib.Get(), std::size(cube_idx));
+  auto const quad_blas = make_blas(quad_vb.Get(), std::size(quad_vertices));
+  auto const cube_blas = make_blas(cube_vb.Get(), std::size(cube_vertices), cube_ib.Get(), std::size(cube_indices));
 
   // Init scene
 
