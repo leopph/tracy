@@ -27,25 +27,6 @@ struct RenderingContext {
 
 
 constexpr UINT kNumInstances{3};
-constexpr DXGI_SAMPLE_DESC kNoAaDesc = {
-  .Count = 1,
-  .Quality = 0
-};
-constexpr D3D12_HEAP_PROPERTIES kUploadHeapProps{
-  .Type = D3D12_HEAP_TYPE_UPLOAD
-};
-constexpr D3D12_HEAP_PROPERTIES kDefaultHeapProps{
-  .Type = D3D12_HEAP_TYPE_DEFAULT
-};
-constexpr D3D12_RESOURCE_DESC kBasicBufferDesc{
-  .Dimension = D3D12_RESOURCE_DIMENSION_BUFFER,
-  .Width = 0,
-  .Height = 1,
-  .DepthOrArraySize = 1,
-  .MipLevels = 1,
-  .SampleDesc = kNoAaDesc,
-  .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-};
 
 
 template<std::unsigned_integral T>
