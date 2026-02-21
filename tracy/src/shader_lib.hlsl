@@ -4,8 +4,13 @@ struct Payload {
   bool missed;
 };
 
-RaytracingAccelerationStructure scene : register(t0);
-RWTexture2D<float4> uav : register(u0);
+
+struct Constants {
+  uint tlas_idx;
+  uint uav_idx;
+};
+
+ConstantBuffer<Constants> g_constants : register(b0, space0);
 
 static float3 const camera = float3(0, 1.5, -7);
 static float3 const light = float3(0, 200, 0);
@@ -32,8 +37,10 @@ void RayGeneration() {
   payload.allow_reflection = true;
   payload.missed = false;
 
+  RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_constants.tlas_idx];
   TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
+  RWTexture2D<float4> uav = ResourceDescriptorHeap[g_constants.uav_idx];
   uav[idx] = float4(payload.color, 1);
 }
 
@@ -107,6 +114,7 @@ void HitMirror(inout Payload payload, float2 const uv) {
   mirror_ray.TMax = 1000;
 
   payload.allow_reflection = false;
+  RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_constants.tlas_idx];
   TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, mirror_ray, payload);
 }
 
@@ -126,6 +134,7 @@ void HitFloor(inout Payload payload, float2 const uv) {
   shadow.allow_reflection = false;
   shadow.missed = false;
 
+  RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_constants.tlas_idx];
   TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, shadow_ray, shadow);
 
   if (!shadow.missed) {

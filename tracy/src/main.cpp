@@ -9,17 +9,13 @@
 
 import std;
 
-extern "C" {
-__declspec(dllexport) extern UINT const D3D12SDKVersion = D3D12_SDK_VERSION;
-__declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
-}
-
 
 template<unsigned N>
 using Vector = std::array<float, N>;
 
 
-constexpr UINT kNumFramesInFlight{2};
+constexpr UINT kMaxGpuQueuedFrames{1};
+constexpr UINT kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
 
 
 struct RenderingContext {
@@ -50,6 +46,14 @@ constexpr D3D12_RESOURCE_DESC kBasicBufferDesc{
   .SampleDesc = kNoAaDesc,
   .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
 };
+
+
+template<std::unsigned_integral T>
+[[nodiscard]] constexpr auto SatSub(T const lhs, T const rhs) -> T {
+  T ret{lhs - rhs};
+  ret &= -(ret <= lhs);
+  return ret;
+}
 
 
 auto ThrowIfFailed(HRESULT const hr) -> void {
@@ -184,8 +188,8 @@ auto main() -> int {
   auto const create_buffer_for = [&ctx](auto const& data) {
     auto const buffer = ctx.device->CreateBuffer(
       wand::BufferDesc{
-        .size = sizeof(data), .stride = 0, .constant_buffer = false,
-        .shader_resource = false, .unordered_access = false
+        .size = sizeof(data), .stride = 1, .constant_buffer = false,
+        .shader_resource = true, .unordered_access = false
       }, wand::CpuAccess::kWrite);
 
     auto* const data_ptr = buffer->Map();
@@ -219,22 +223,23 @@ auto main() -> int {
 
   auto const make_as = [&ctx](D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const& inputs,
                               UINT64* update_scratch_size = nullptr) {
-    auto const make_buffer = [&ctx](UINT64 const size) {
-      return ctx.device->CreateBuffer(
-        wand::BufferDesc{
-          .size = size, .stride = 0, .constant_buffer = false, .shader_resource = false,
-          .unordered_access = true
-        }, wand::CpuAccess::kWrite);
-    };
-
     auto const prebuild_info = ctx.device->GetRtAccelerationStructurePrebuildInfo(inputs);
 
     if (update_scratch_size) {
       *update_scratch_size = prebuild_info.UpdateScratchDataSizeInBytes;
     }
 
-    auto const scratch = make_buffer(prebuild_info.ScratchDataSizeInBytes);
-    auto const as = make_buffer(prebuild_info.ResultDataMaxSizeInBytes);
+    auto const scratch = ctx.device->CreateBuffer(
+      wand::BufferDesc{
+        .size = prebuild_info.ScratchDataSizeInBytes, .stride = 1, .constant_buffer = false, .shader_resource = false,
+        .unordered_access = true,
+      }, wand::CpuAccess::kNone);
+
+    auto const as = ctx.device->CreateBuffer(
+      wand::BufferDesc{
+        .size = prebuild_info.ResultDataMaxSizeInBytes, .stride = 1, .constant_buffer = false, .shader_resource = true,
+        .unordered_access = false, .acceleration_structure = true
+      }, wand::CpuAccess::kNone);
 
     wand::BuildRaytracingAccelerationStructureDesc const build_desc = {
       .dst_as = as.get(),
@@ -336,7 +341,7 @@ auto main() -> int {
     wand::BufferDesc{
       /* WARP bug workaround: use 8 if the required size was reported as less */
       .size = std::max<UINT64>(update_scratch_size, 8ull),
-      .stride = 0, .constant_buffer = false, .shader_resource = false, .unordered_access = true
+      .stride = 1, .constant_buffer = false, .shader_resource = false, .unordered_access = true
     }, wand::CpuAccess::kNone
   );
 
@@ -371,13 +376,10 @@ auto main() -> int {
     }, wand::CpuAccess::kWrite);
 
   {
-    ComPtr<ID3D12StateObjectProperties> pso_props;
-    ThrowIfFailed(pso->QueryInterface(IID_PPV_ARGS(&pso_props)));
-
     auto shader_table_data = shader_table->Map();
 
     auto const write_id = [&](wchar_t const* const name) {
-      auto const* const id = pso_props->GetShaderIdentifier(name);
+      auto const* const id = pso->GetShaderIdentifier(name);
       std::memcpy(shader_table_data, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
       shader_table_data = static_cast<char*>(shader_table_data) + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
     };
@@ -388,6 +390,9 @@ auto main() -> int {
 
     shader_table->Unmap();
   }
+
+  // Create fence for frame synchronization
+  auto const frame_fence = ctx.device->CreateFence(0);
 
   // Main loop
 
@@ -432,46 +437,45 @@ auto main() -> int {
 
     // Dispatch
 
-    ctx.cmd_lists[frame_idx]->SetPipelineState(pso.Get());
-    ctx.cmd_lists[frame_idx]->SetComputeRootSignature(root_signature.Get());
-    ctx.cmd_lists[frame_idx]->SetDescriptorHeaps(1, ctx.uav_heap.GetAddressOf());
-    auto const uav_table = ctx.uav_heap->GetGPUDescriptorHandleForHeapStart();
-    ctx.cmd_lists[frame_idx]->SetComputeRootDescriptorTable(0, uav_table);
-    ctx.cmd_lists[frame_idx]->SetComputeRootShaderResourceView(1, tlas->GetGPUVirtualAddress());
+    ctx.cmd_lists[frame_idx]->SetRtState(*pso);
+    ctx.cmd_lists[frame_idx]->SetPipelineParameter(0, tlas->GetShaderResource());
+    ctx.cmd_lists[frame_idx]->SetUnorderedAccess(1, *ctx.render_target);
 
     auto const rt_desc = ctx.render_target->GetDesc();
 
     D3D12_DISPATCH_RAYS_DESC const dispatch_desc = {
       .RayGenerationShaderRecord = {
-        .StartAddress = shader_table->GetGPUVirtualAddress(),
+        .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress(),
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .MissShaderTable = {
-        .StartAddress = shader_table->GetGPUVirtualAddress() + D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+        .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress() +
+        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .HitGroupTable = {
-        .StartAddress = shader_table->GetGPUVirtualAddress() + 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+        .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress() + 2 *
+        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
-      .Width = static_cast<UINT>(rt_desc.Width),
-      .Height = rt_desc.Height,
+      .Width = rt_desc.width,
+      .Height = rt_desc.height,
       .Depth = 1
     };
 
-    ctx.cmd_lists[frame_idx]->DispatchRays(&dispatch_desc);
+    ctx.cmd_lists[frame_idx]->DispatchRays(dispatch_desc);
 
-    {
-      ComPtr<ID3D12Resource> back_buffer;
-      ThrowIfFailed(ctx.swap_chain->GetBuffer(ctx.swap_chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back_buffer)));
-
-      ctx.cmd_lists[frame_idx]->CopyResource(back_buffer.Get(), ctx.render_target.Get());
-    }
+    ctx.cmd_lists[frame_idx]->CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.render_target);
 
     ctx.cmd_lists[frame_idx]->End();
     ctx.device->ExecuteCommandLists(std::span{ctx.cmd_lists[frame_idx].get(), 1});
 
     ctx.device->Present(*ctx.swap_chain);
+
+    // Wait for queued frames
+    auto const frame_fence_val = frame_fence->GetNextValue();
+    ctx.device->SignalFence(*frame_fence);
+    frame_fence->Wait(SatSub<UINT64>(frame_fence_val, kMaxGpuQueuedFrames));
 
     ++frame_count;
   }
