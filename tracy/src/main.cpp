@@ -169,8 +169,8 @@ auto main() -> int {
   auto const create_buffer_for = [&ctx](auto const& data) {
     auto const buffer = ctx.device->CreateBuffer(
       wand::BufferDesc{
-        .size = sizeof(data), .stride = 1, .constant_buffer = false,
-        .shader_resource = true, .unordered_access = false
+        .size = sizeof(data), .allow_shader_resource = true, .allow_unordered_access = false,
+        .allow_acceleration_structure = false
       }, wand::CpuAccess::kWrite);
 
     auto* const data_ptr = buffer->Map();
@@ -212,14 +212,14 @@ auto main() -> int {
 
     auto const scratch = ctx.device->CreateBuffer(
       wand::BufferDesc{
-        .size = prebuild_info.ScratchDataSizeInBytes, .stride = 1, .constant_buffer = false, .shader_resource = false,
-        .unordered_access = true,
+        .size = prebuild_info.ScratchDataSizeInBytes, .allow_shader_resource = false, .allow_unordered_access = true,
+        .allow_acceleration_structure = false,
       }, wand::CpuAccess::kNone);
 
     auto const as = ctx.device->CreateBuffer(
       wand::BufferDesc{
-        .size = prebuild_info.ResultDataMaxSizeInBytes, .stride = 1, .constant_buffer = false, .shader_resource = true,
-        .unordered_access = false, .acceleration_structure = true
+        .size = prebuild_info.ResultDataMaxSizeInBytes, .allow_shader_resource = false, .allow_unordered_access = false,
+        .allow_acceleration_structure = true,
       }, wand::CpuAccess::kNone);
 
     wand::BuildRaytracingAccelerationStructureDesc const build_desc = {
@@ -269,19 +269,6 @@ auto main() -> int {
     return make_as(inputs);
   };
 
-  auto const make_tlas = [make_as](wand::Buffer const& instances, UINT const num_instances,
-                                   UINT64* const update_scratch_size) {
-    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const inputs = {
-      .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
-      .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE,
-      .NumDescs = num_instances,
-      .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-      .InstanceDescs = instances.GetInternalResource()->GetGPUVirtualAddress()
-    };
-
-    return make_as(inputs, update_scratch_size);
-  };
-
   // BLAS for meshes
 
   auto const quad_blas = make_blas(*quad_vb, std::size(quad_vertices));
@@ -290,8 +277,8 @@ auto main() -> int {
   // Init scene
 
   wand::BufferDesc constexpr instance_buf_desc{
-    .size = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * kNumInstances, .stride = sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
-    .constant_buffer = false, .shader_resource = false, .unordered_access = false
+    .size = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * kNumInstances, .allow_shader_resource = false,
+    .allow_unordered_access = false, .allow_acceleration_structure = false
   };
 
   std::array<wand::SharedDeviceChildHandle<wand::Buffer>, kNumFramesInFlight> instance_bufs;
@@ -315,14 +302,33 @@ auto main() -> int {
 
   // TLAS for scene
 
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const inputs = {
+    .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
+    .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE,
+    .NumDescs = kNumInstances,
+    .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
+    .InstanceDescs = instance_bufs[0]->GetInternalResource()->GetGPUVirtualAddress()
+  };
+
   UINT64 update_scratch_size;
-  auto const tlas = make_tlas(*instance_bufs[0], kNumInstances, &update_scratch_size);
+  auto const tlas = make_as(inputs, &update_scratch_size);
+
+  auto const tlas_view = ctx.device->CreateBufferView(
+    wand::BufferViewDesc{
+      .offset = 0,
+      .size = kNumInstances * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
+      .stride = sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
+      .constant_buffer = false,
+      .shader_resource = false,
+      .unordered_access = false,
+      .acceleration_structure = true
+    }, tlas);
 
   auto const tlas_update_scratch = ctx.device->CreateBuffer(
     wand::BufferDesc{
       /* WARP bug workaround: use 8 if the required size was reported as less */
       .size = std::max<UINT64>(update_scratch_size, 8ull),
-      .stride = 1, .constant_buffer = false, .shader_resource = false, .unordered_access = true
+      .allow_shader_resource = false, .allow_unordered_access = true, .allow_acceleration_structure = false,
     }, wand::CpuAccess::kNone
   );
 
@@ -352,8 +358,8 @@ auto main() -> int {
 
   auto const shader_table = ctx.device->CreateBuffer(
     wand::BufferDesc{
-      .size = kShaderTableSize * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .stride = 0, .constant_buffer = false,
-      .shader_resource = false, .unordered_access = false
+      .size = kShaderTableSize * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .allow_shader_resource = false,
+      .allow_unordered_access = false, .allow_acceleration_structure = false
     }, wand::CpuAccess::kWrite);
 
   {
@@ -419,7 +425,7 @@ auto main() -> int {
     // Dispatch
 
     ctx.cmd_lists[frame_idx]->SetRtState(*pso);
-    ctx.cmd_lists[frame_idx]->SetPipelineParameter(0, tlas->GetShaderResource());
+    ctx.cmd_lists[frame_idx]->SetPipelineParameter(0, tlas_view->GetShaderResource());
     ctx.cmd_lists[frame_idx]->SetUnorderedAccess(1, *ctx.render_target);
 
     auto const rt_desc = ctx.render_target->GetDesc();
