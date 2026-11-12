@@ -206,9 +206,9 @@ auto main() -> int {
 
   // AS utilities
 
-  auto const make_as = [&ctx](D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const& inputs,
+  auto const make_as = [&ctx](wand::BuildAccelerationStructureInputs const& inputs,
                               wand::AccelerationStructureType const type, UINT64* update_scratch_size = nullptr) {
-    auto const prebuild_info = ctx.device->GetRtAccelerationStructurePrebuildInfo(inputs);
+    auto const prebuild_info = ctx.device->GetAccelerationStructurePrebuildInfo(inputs);
 
     if (update_scratch_size) {
       *update_scratch_size = prebuild_info.UpdateScratchDataSizeInBytes;
@@ -226,14 +226,14 @@ auto main() -> int {
       .type = type
     });
 
-    wand::BuildRaytracingAccelerationStructureDesc const build_desc = {
+    wand::BuildAccelerationStructureDesc const build_desc = {
       .dst_as = *as,
       .inputs = inputs,
       .scratch_buffer = wand::BufferRange{*scratch}
     };
 
     ctx.cmd_lists[0]->Begin(nullptr);
-    ctx.cmd_lists[0]->BuildRaytracingAccelerationStructure(build_desc);
+    ctx.cmd_lists[0]->BuildAccelerationStructure(build_desc);
     ctx.cmd_lists[0]->End();
 
     ctx.device->ExecuteCommandLists(std::span{ctx.cmd_lists[0].get(), 1});
@@ -242,32 +242,19 @@ auto main() -> int {
     return as;
   };
 
-  auto const make_blas = [make_as](wand::Buffer const& vertex_buffer, UINT const vtx_count,
-                                   wand::Buffer const* const index_buffer = nullptr,
-                                   UINT const idx_count = 0) {
-    D3D12_RAYTRACING_GEOMETRY_DESC const geometry_desc = {
-      .Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
-      .Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
-      .Triangles = {
-        .Transform3x4 = 0,
-        .IndexFormat = index_buffer ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_UNKNOWN,
-        .VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT,
-        .IndexCount = idx_count,
-        .VertexCount = vtx_count,
-        .IndexBuffer = index_buffer ? index_buffer->GetInternalResource()->GetGPUVirtualAddress() : 0,
-        .VertexBuffer = {
-          .StartAddress = vertex_buffer.GetInternalResource()->GetGPUVirtualAddress(),
-          .StrideInBytes = 3 * sizeof(float)
-        }
-      }
+  auto const make_blas = [make_as]
+  (wand::Buffer const& vertex_buffer, wand::Buffer const* const index_buffer = nullptr) {
+    auto const geometry_desc = wand::TriangleGeometry{
+      .vertices = wand::BufferRange{vertex_buffer, wand::BufferRegion{.stride = 12}},
+      .vertex_format = DXGI_FORMAT_R32G32B32_FLOAT,
+      .indices = index_buffer ? std::make_optional(wand::BufferRange{*index_buffer}) : std::nullopt,
+      .index_format = index_buffer ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_UNKNOWN,
+      .flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE
     };
 
-    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const inputs = {
-      .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
-      .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE,
-      .NumDescs = 1,
-      .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-      .pGeometryDescs = &geometry_desc
+    auto const inputs = wand::BuildBottomLevelAsInputs{
+      .geometries = std::span{&geometry_desc, 1},
+      .flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE
     };
 
     return make_as(inputs, wand::AccelerationStructureType::kBottomLevel);
@@ -275,8 +262,8 @@ auto main() -> int {
 
   // BLAS for meshes
 
-  auto const quad_blas = make_blas(*quad_vb, std::size(quad_vertices));
-  auto const cube_blas = make_blas(*cube_vb, std::size(cube_vertices), cube_ib.get(), std::size(cube_indices));
+  auto const quad_blas = make_blas(*quad_vb);
+  auto const cube_blas = make_blas(*cube_vb, cube_ib.get());
 
   // Init scene
 
@@ -305,12 +292,15 @@ auto main() -> int {
 
   // TLAS for scene
 
-  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const inputs = {
-    .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
-    .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE,
-    .NumDescs = kNumInstances,
-    .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-    .InstanceDescs = instance_bufs[0]->GetInternalResource()->GetGPUVirtualAddress()
+  auto const inputs = wand::BuildTopLevelAsInputs{
+    .instances = wand::BufferRange{
+      *instance_bufs[0], wand::BufferRegion{
+        .offset = 0,
+        .size = kNumInstances * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
+        .stride = sizeof(D3D12_RAYTRACING_INSTANCE_DESC)
+      }
+    },
+    .flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE
   };
 
   UINT64 update_scratch_size;
@@ -398,21 +388,24 @@ auto main() -> int {
 
     // Update TLAS
 
-    wand::BuildRaytracingAccelerationStructureDesc const tlas_update_desc{
+    auto const tlas_update_desc = wand::BuildAccelerationStructureDesc{
       .dst_as = *tlas,
-      .inputs = {
-        .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
-        .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
-                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE,
-        .NumDescs = kNumInstances,
-        .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
-        .InstanceDescs = instance_bufs[frame_idx]->GetInternalResource()->GetGPUVirtualAddress()
+      .inputs = wand::BuildTopLevelAsInputs{
+        .instances = wand::BufferRange{
+          *instance_bufs[frame_idx], wand::BufferRegion{
+            .offset = 0,
+            .size = kNumInstances * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
+            .stride = sizeof(D3D12_RAYTRACING_INSTANCE_DESC)
+          }
+        },
+        .flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
+                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE
       },
       .src_as = tlas.get(),
       .scratch_buffer = wand::BufferRange{*tlas_update_scratch}
     };
 
-    ctx.cmd_lists[frame_idx]->BuildRaytracingAccelerationStructure(tlas_update_desc);
+    ctx.cmd_lists[frame_idx]->BuildAccelerationStructure(tlas_update_desc);
 
     // Dispatch
 
