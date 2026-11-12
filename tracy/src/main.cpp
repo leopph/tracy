@@ -10,19 +10,25 @@
 import std;
 
 
+extern "C" {
+__declspec(dllexport) extern UINT const D3D12SDKVersion = D3D12_SDK_VERSION;
+__declspec(dllexport) extern char const* D3D12SDKPath = ".\\D3D12\\";
+}
+
+
 template<unsigned N>
 using Vector = std::array<float, N>;
 
 
 constexpr UINT kMaxGpuQueuedFrames{1};
-constexpr UINT kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
+constexpr auto kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
 
 
 struct RenderingContext {
   std::unique_ptr<wand::GraphicsDevice> device;
-  wand::SharedDeviceChildHandle<wand::SwapChain> swap_chain;
-  std::array<wand::SharedDeviceChildHandle<wand::CommandList>, kNumFramesInFlight> cmd_lists;
-  wand::SharedDeviceChildHandle<wand::Texture> render_target;
+  wand::SharedDeviceHandle<wand::SwapChain> swap_chain;
+  std::array<wand::SharedDeviceHandle<wand::CommandList>, kNumFramesInFlight> cmd_lists;
+  wand::SharedDeviceHandle<wand::Texture> render_target;
 };
 
 
@@ -74,7 +80,8 @@ auto Resize(HWND const hwnd) -> void {
   ctx->render_target = ctx->device->CreateTexture(
     wand::TextureDesc{
       .dimension = wand::TextureDimension::k2D, .width = width, .height = height, .depth_or_array_size = 1,
-      .mip_levels = 1, .format = DXGI_FORMAT_R8G8B8A8_UNORM, .sample_count = 1, .depth_stencil = false,
+      .mip_levels = 1, .format = DXGI_FORMAT_R8G8B8A8_UNORM, .sample_count = 1,
+      .component_mapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .depth_stencil = false,
       .render_target = false, .shader_resource = false, .unordered_access = true
     }, wand::CpuAccess::kNone, nullptr);
 }
@@ -106,17 +113,17 @@ auto UpdateTransforms(D3D12_RAYTRACING_INSTANCE_DESC* const instance_data) -> vo
 
 auto WINAPI WndProc(HWND const hwnd, UINT const msg, WPARAM const wparam, LPARAM const lparam) -> LRESULT {
   switch (msg) {
-  case WM_CLOSE: {
-    PostQuitMessage(0);
-    return 0;
-  }
-  case WM_SIZE: {
-    Resize(hwnd);
-    return 0;
-  }
-  default: {
-    return DefWindowProcW(hwnd, msg, wparam, lparam);
-  }
+    case WM_CLOSE: {
+      PostQuitMessage(0);
+      return 0;
+    }
+    case WM_SIZE: {
+      Resize(hwnd);
+      return 0;
+    }
+    default: {
+      return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
   }
 }
 
@@ -128,14 +135,14 @@ auto main() -> int {
   // Create window
 
   WNDCLASSW const wcw = {
-    .lpfnWndProc = &WndProc, .hCursor = LoadCursor(nullptr, IDC_ARROW), .lpszClassName = L"DxrTutorialClass"
+    .lpfnWndProc = &WndProc, .hCursor = LoadCursor(nullptr, IDC_ARROW), .lpszClassName = L"TracyWindowClass"
   };
 
   RegisterClassW(&wcw);
 
   auto const hwnd = std::unique_ptr<std::remove_pointer_t<HWND>, HwndDeleter>{
-    CreateWindowExW(0, wcw.lpszClassName, L"DXR tutorial", WS_VISIBLE | WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,
-                    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, nullptr, nullptr)
+    CreateWindowExW(0, wcw.lpszClassName, L"tracy", WS_VISIBLE | WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,
+      CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, nullptr, nullptr)
   };
 
   // Create rendering context
@@ -168,10 +175,7 @@ auto main() -> int {
 
   auto const create_buffer_for = [&ctx](auto const& data) {
     auto const buffer = ctx.device->CreateBuffer(
-      wand::BufferDesc{
-        .size = sizeof(data), .allow_shader_resource = true, .allow_unordered_access = false,
-        .allow_acceleration_structure = false
-      }, wand::CpuAccess::kWrite);
+      wand::BufferDesc{.size = sizeof(data), .usage = wand::BufferUsage::kShaderResource}, wand::CpuAccess::kWrite);
 
     auto* const data_ptr = buffer->Map();
     std::memcpy(data_ptr, &data, sizeof(data));
@@ -203,7 +207,7 @@ auto main() -> int {
   // AS utilities
 
   auto const make_as = [&ctx](D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS const& inputs,
-                              UINT64* update_scratch_size = nullptr) {
+                              wand::AccelerationStructureType const type, UINT64* update_scratch_size = nullptr) {
     auto const prebuild_info = ctx.device->GetRtAccelerationStructurePrebuildInfo(inputs);
 
     if (update_scratch_size) {
@@ -212,24 +216,24 @@ auto main() -> int {
 
     auto const scratch = ctx.device->CreateBuffer(
       wand::BufferDesc{
-        .size = prebuild_info.ScratchDataSizeInBytes, .allow_shader_resource = false, .allow_unordered_access = true,
-        .allow_acceleration_structure = false,
+        .size = prebuild_info.ScratchDataSizeInBytes, .usage = wand::BufferUsage::kAccelerationScratch
       }, wand::CpuAccess::kNone);
 
-    auto const as = ctx.device->CreateBuffer(
-      wand::BufferDesc{
-        .size = prebuild_info.ResultDataMaxSizeInBytes, .allow_shader_resource = false, .allow_unordered_access = false,
-        .allow_acceleration_structure = true,
-      }, wand::CpuAccess::kNone);
+    auto const as = wand::CreateBufferWithAs(*ctx.device, wand::BufferDesc{
+      .size = prebuild_info.ResultDataMaxSizeInBytes, .usage = wand::BufferUsage::kAccelerationStructure
+    }, wand::AccelerationStructureDesc{
+      .region = {},
+      .type = type
+    });
 
     wand::BuildRaytracingAccelerationStructureDesc const build_desc = {
-      .dst_as = as.get(),
+      .dst_as = *as,
       .inputs = inputs,
-      .scratch_buffer = scratch.get()
+      .scratch_buffer = wand::BufferRange{*scratch}
     };
 
     ctx.cmd_lists[0]->Begin(nullptr);
-    ctx.cmd_lists[0]->BuildRaytracingAccelerationStructure(std::span{&build_desc, 1});
+    ctx.cmd_lists[0]->BuildRaytracingAccelerationStructure(build_desc);
     ctx.cmd_lists[0]->End();
 
     ctx.device->ExecuteCommandLists(std::span{ctx.cmd_lists[0].get(), 1});
@@ -266,7 +270,7 @@ auto main() -> int {
       .pGeometryDescs = &geometry_desc
     };
 
-    return make_as(inputs);
+    return make_as(inputs, wand::AccelerationStructureType::kBottomLevel);
   };
 
   // BLAS for meshes
@@ -277,11 +281,10 @@ auto main() -> int {
   // Init scene
 
   wand::BufferDesc constexpr instance_buf_desc{
-    .size = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * kNumInstances, .allow_shader_resource = false,
-    .allow_unordered_access = false, .allow_acceleration_structure = false
+    .size = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * kNumInstances, .usage = wand::BufferUsage::kNone
   };
 
-  std::array<wand::SharedDeviceChildHandle<wand::Buffer>, kNumFramesInFlight> instance_bufs;
+  std::array<wand::SharedDeviceHandle<wand::Buffer>, kNumFramesInFlight> instance_bufs;
   std::array<D3D12_RAYTRACING_INSTANCE_DESC*, kNumFramesInFlight> instance_data;
 
   for (auto i = 0u; i < kNumFramesInFlight; i++) {
@@ -293,7 +296,7 @@ auto main() -> int {
       instance_data[i][j] = {
         .InstanceID = j,
         .InstanceMask = 1,
-        .AccelerationStructure = (j ? quad_blas : cube_blas)->GetInternalResource()->GetGPUVirtualAddress()
+        .AccelerationStructure = (j ? quad_blas : cube_blas)->GetGpuAddress()
       };
     }
   }
@@ -311,24 +314,13 @@ auto main() -> int {
   };
 
   UINT64 update_scratch_size;
-  auto const tlas = make_as(inputs, &update_scratch_size);
-
-  auto const tlas_view = ctx.device->CreateBufferView(
-    wand::BufferViewDesc{
-      .offset = 0,
-      .size = kNumInstances * sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
-      .stride = sizeof(D3D12_RAYTRACING_INSTANCE_DESC),
-      .constant_buffer = false,
-      .shader_resource = false,
-      .unordered_access = false,
-      .acceleration_structure = true
-    }, tlas);
+  auto const tlas = make_as(inputs, wand::AccelerationStructureType::kTopLevel, &update_scratch_size);
 
   auto const tlas_update_scratch = ctx.device->CreateBuffer(
     wand::BufferDesc{
       /* WARP bug workaround: use 8 if the required size was reported as less */
       .size = std::max<UINT64>(update_scratch_size, 8ull),
-      .allow_shader_resource = false, .allow_unordered_access = true, .allow_acceleration_structure = false,
+      .usage = wand::BufferUsage::kAccelerationScratch
     }, wand::CpuAccess::kNone
   );
 
@@ -358,8 +350,7 @@ auto main() -> int {
 
   auto const shader_table = ctx.device->CreateBuffer(
     wand::BufferDesc{
-      .size = kShaderTableSize * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .allow_shader_resource = false,
-      .allow_unordered_access = false, .allow_acceleration_structure = false
+      .size = kShaderTableSize * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .usage = wand::BufferUsage::kNone
     }, wand::CpuAccess::kWrite);
 
   {
@@ -408,24 +399,25 @@ auto main() -> int {
     // Update TLAS
 
     wand::BuildRaytracingAccelerationStructureDesc const tlas_update_desc{
-      .dst_as = tlas.get(),
+      .dst_as = *tlas,
       .inputs = {
         .Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL,
-        .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE,
+        .Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
+                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE,
         .NumDescs = kNumInstances,
         .DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY,
         .InstanceDescs = instance_bufs[frame_idx]->GetInternalResource()->GetGPUVirtualAddress()
       },
       .src_as = tlas.get(),
-      .scratch_buffer = tlas_update_scratch.get()
+      .scratch_buffer = wand::BufferRange{*tlas_update_scratch}
     };
 
-    ctx.cmd_lists[frame_idx]->BuildRaytracingAccelerationStructure(std::span{&tlas_update_desc, 1});
+    ctx.cmd_lists[frame_idx]->BuildRaytracingAccelerationStructure(tlas_update_desc);
 
     // Dispatch
 
     ctx.cmd_lists[frame_idx]->SetRtState(*pso);
-    ctx.cmd_lists[frame_idx]->SetPipelineParameter(0, tlas_view->GetShaderResource());
+    ctx.cmd_lists[frame_idx]->SetAccelerationStructure(0, *tlas);
     ctx.cmd_lists[frame_idx]->SetUnorderedAccess(1, *ctx.render_target);
 
     auto const rt_desc = ctx.render_target->GetDesc();
@@ -437,12 +429,12 @@ auto main() -> int {
       },
       .MissShaderTable = {
         .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress() +
-        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+                        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .HitGroupTable = {
         .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress() + 2 *
-        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
+                        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
         .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
       },
       .Width = rt_desc.width,
