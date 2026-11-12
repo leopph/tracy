@@ -422,27 +422,24 @@ auto main() -> int {
 
     auto const rt_desc = ctx.render_target->GetDesc();
 
-    D3D12_DISPATCH_RAYS_DESC const dispatch_desc = {
-      .RayGenerationShaderRecord = {
-        .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress(),
-        .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+    ctx.cmd_lists[frame_idx]->DispatchRays(wand::DispatchRaysDesc{
+      .ray_generation_shader_record = wand::BufferRange{
+        *shader_table, wand::BufferRegion{.size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES}
       },
-      .MissShaderTable = {
-        .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress() +
-                        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
-        .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+      .miss_shader_table = wand::BufferRange{
+        *shader_table,
+        wand::BufferRegion{
+          .offset = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+        }
       },
-      .HitGroupTable = {
-        .StartAddress = shader_table->GetInternalResource()->GetGPUVirtualAddress() + 2 *
-                        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT,
-        .SizeInBytes = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+      .hit_group_table = wand::BufferRange{
+        *shader_table, wand::BufferRegion{
+          .offset = 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+        }
       },
-      .Width = rt_desc.width,
-      .Height = rt_desc.height,
-      .Depth = 1
-    };
-
-    ctx.cmd_lists[frame_idx]->DispatchRays(dispatch_desc);
+      .width = rt_desc.width,
+      .height = rt_desc.height
+    });
 
     ctx.cmd_lists[frame_idx]->CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.render_target);
 
