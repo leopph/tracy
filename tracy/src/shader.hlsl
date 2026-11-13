@@ -179,5 +179,5 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
   }
 
   RWTexture2D<float4> uav = ResourceDescriptorHeap[g_params.target_uav];
-  uav[idx] = float4(color, 1);
+  uav[idx] += float4(color, 1);
 }

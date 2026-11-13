@@ -1,12 +1,16 @@
+#include <cstdint>
+
 #include <DirectXMath.h>
 #include <wand/wand.hpp>
 
 #include "shader_interop.h"
 
 #ifndef NDEBUG
+#include "generated/Debug/resolve.h"
 #include "generated/Debug/shader.h"
 #include "generated/Debug/shader_lib.h"
 #else
+#include "generated/Release/resolve.h"
 #include "generated/Release/shader.h"
 #include "generated/Release/shader_lib.h"
 #endif
@@ -27,13 +31,16 @@ using Vector = std::array<float, N>;
 constexpr UINT kMaxGpuQueuedFrames{1};
 constexpr auto kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
 constexpr auto kUseRayQuery = true;
+constexpr auto kAnimate = false;
 
 
 struct RenderingContext {
   std::unique_ptr<wand::GraphicsDevice> device;
   wand::SharedDeviceHandle<wand::SwapChain> swap_chain;
   std::array<wand::SharedDeviceHandle<wand::CommandList>, kNumFramesInFlight> cmd_lists;
-  wand::SharedDeviceHandle<wand::Texture> render_target;
+  wand::SharedDeviceHandle<wand::Texture> accum_tex;
+  wand::SharedDeviceHandle<wand::Texture> resolve_tex;
+  std::uint32_t sample_count{0};
 };
 
 
@@ -82,7 +89,15 @@ auto Resize(HWND const hwnd) -> void {
   ctx->device->WaitIdle();
   ctx->device->ResizeSwapChain(*ctx->swap_chain, width, height);
 
-  ctx->render_target = ctx->device->CreateTexture(
+  ctx->accum_tex = ctx->device->CreateTexture(
+    wand::TextureDesc{
+      .dimension = wand::TextureDimension::k2D, .width = width, .height = height, .depth_or_array_size = 1,
+      .mip_levels = 1, .format = DXGI_FORMAT_R32G32B32A32_FLOAT, .sample_count = 1,
+      .component_mapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .depth_stencil = false,
+      .render_target = true, .shader_resource = true, .unordered_access = true
+    }, wand::CpuAccess::kNone, nullptr);
+
+  ctx->resolve_tex = ctx->device->CreateTexture(
     wand::TextureDesc{
       .dimension = wand::TextureDimension::k2D, .width = width, .height = height, .depth_or_array_size = 1,
       .mip_levels = 1, .format = DXGI_FORMAT_R8G8B8A8_UNORM, .sample_count = 1,
@@ -99,7 +114,7 @@ auto UpdateTransforms(D3D12_RAYTRACING_INSTANCE_DESC* const instance_data) -> vo
     XMStoreFloat3x4(ptr, mx);
   };
 
-  auto const time = static_cast<float>(GetTickCount64()) / 1000.0f;
+  auto const time = kAnimate ? static_cast<float>(GetTickCount64()) / 1000.0f : 0.0f;
 
   auto cube = XMMatrixRotationRollPitchYaw(time / 2, time / 3, time / 5);
   cube *= XMMatrixTranslation(-1.5, 2, 2);
@@ -130,6 +145,12 @@ auto WINAPI WndProc(HWND const hwnd, UINT const msg, WPARAM const wparam, LPARAM
       return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
   }
+}
+
+
+[[nodiscard]]
+auto IsResetRequested() -> bool {
+  return false;
 }
 
 
@@ -469,6 +490,12 @@ auto main() -> int {
     .cs = CD3DX12_SHADER_BYTECODE{g_shader_bin, std::size(g_shader_bin)}
   }, sizeof(ComputeDispatchParams) / 4);
 
+  // Create resolve PSO
+
+  auto const resolve_pso = ctx.device->CreatePipelineState(wand::PipelineDesc{
+    .cs = CD3DX12_SHADER_BYTECODE{g_resolve_bin, std::size(g_resolve_bin)}
+  }, sizeof(ResolveParams) / 4);
+
   // Create fence for frame synchronization
   auto const frame_fence = ctx.device->CreateFence(0);
 
@@ -492,6 +519,17 @@ auto main() -> int {
 
     auto& cmd = *ctx.cmd_lists[frame_idx];
     cmd.Begin(nullptr);
+
+    // Handle accumulation reset
+
+    if (IsResetRequested()) {
+      cmd.ClearRenderTarget(*ctx.accum_tex, std::array{0.0f, 0.0f, 0.0f, 1.0f}, {});
+      ctx.sample_count = 0;
+    }
+
+    // Increase sample count to account for this frame
+
+    ++ctx.sample_count;
 
     // Update scene transforms
 
@@ -520,12 +558,12 @@ auto main() -> int {
 
     // Dispatch
 
-    auto const rt_desc = ctx.render_target->GetDesc();
+    auto const rt_desc = ctx.accum_tex->GetDesc();
 
     if constexpr (kUseRayQuery) {
       cmd.SetPipelineState(*cs_pso);
       cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(ComputeDispatchParams, as_srv), *tlas);
-      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ComputeDispatchParams, target_uav), *ctx.render_target);
+      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ComputeDispatchParams, target_uav), *ctx.accum_tex);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, width), rt_desc.width);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, height), rt_desc.height);
       cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, inst_table_srv), *inst_table_buf);
@@ -538,7 +576,7 @@ auto main() -> int {
     } else {
       cmd.SetRtState(*pso);
       cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(RayDispatchParams, tlas_idx), *tlas);
-      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(RayDispatchParams, uav_idx), *ctx.render_target);
+      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(RayDispatchParams, uav_idx), *ctx.accum_tex);
 
       cmd.DispatchRays(wand::DispatchRaysDesc{
         .ray_generation_shader_record = wand::BufferRange{
@@ -560,7 +598,21 @@ auto main() -> int {
       });
     }
 
-    cmd.CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.render_target);
+    // Resolve pass
+    {
+      cmd.SetPipelineState(*resolve_pso);
+      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ResolveParams, accum_srv), *ctx.accum_tex);
+      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ResolveParams, target_uav), *ctx.resolve_tex);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, width), rt_desc.width);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, height), rt_desc.height);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, sample_count), ctx.sample_count);
+
+      auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
+      auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
+      cmd.Dispatch(dispatch_x, dispatch_y, 1);
+
+      cmd.CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.resolve_tex);
+    }
 
     cmd.End();
     ctx.device->ExecuteCommandLists(std::span{&cmd, 1});

@@ -22,6 +22,7 @@
   <ItemGroup>
     <FxCompile Include="src\shader_lib.hlsl" />
     <FxCompile Include="src\shader.hlsl" />
+    <FxCompile Include="src\resolve.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="vcpkg.json" />

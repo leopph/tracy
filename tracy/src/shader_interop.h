@@ -32,6 +32,15 @@ struct RayDispatchParams {
 };
 
 
+struct ResolveParams {
+  uint accum_srv;
+  uint sample_count;
+  uint target_uav;
+  uint width;
+  uint height;
+};
+
+
 struct GpuInstance {
   uint geom_idx;
   uint mtl_idx;
