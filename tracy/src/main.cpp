@@ -179,33 +179,44 @@ auto main() -> int {
   // Init meshes
 
   auto const create_buffer_for = [&ctx](auto const& data) {
-    auto const buffer = ctx.device->CreateBuffer(
-      wand::BufferDesc{.size = sizeof(data), .usage = wand::BufferUsage::kShaderResource}, wand::CpuAccess::kWrite);
+    auto const view = wand::CreateBufferWithView(*ctx.device,
+      wand::BufferDesc{
+        .size = sizeof(data),
+        .usage = wand::BufferUsage::kShaderResource
+      }, wand::BufferViewDesc{
+        .region = {.offset = 0, .size = wand::kRemainingSize, .stride = sizeof(data[0])},
+        .usage = wand::BufferViewUsage::kShaderResource
+      }, wand::CpuAccess::kWrite);
 
-    auto* const data_ptr = buffer->Map();
+    auto* const data_ptr = view->GetBuffer()->Map();
     std::memcpy(data_ptr, &data, sizeof(data));
-    buffer->Unmap();
+    view->GetBuffer()->Unmap();
 
-    return buffer;
+    return view;
   };
 
-  constexpr std::array quad_vertices{
+  auto constexpr quad_vertices = std::array{
     Vector<3>{-1, 0, -1}, Vector<3>{-1, 0, 1}, Vector<3>{1, 0, 1},
     Vector<3>{-1, 0, -1}, Vector<3>{1, 0, -1}, Vector<3>{1, 0, 1}
   };
 
-  constexpr std::array cube_vertices{
+  auto constexpr quad_indices = std::array{
+    0u, 1u, 2u, 5u, 4u, 3u
+  };
+
+  auto constexpr cube_vertices = std::array{
     Vector<3>{-1, -1, -1}, Vector<3>{1, -1, -1}, Vector<3>{-1, 1, -1}, Vector<3>{1, 1, -1},
     Vector<3>{-1, -1, 1}, Vector<3>{1, -1, 1}, Vector<3>{-1, 1, 1}, Vector<3>{1, 1, 1}
   };
 
-  constexpr std::array cube_indices{
+  auto constexpr cube_indices = std::array{
     4u, 6u, 0u, 2u, 0u, 6u, 0u, 1u, 4u, 5u, 4u, 1u,
     0u, 2u, 1u, 3u, 1u, 2u, 1u, 3u, 5u, 7u, 5u, 3u,
     2u, 6u, 3u, 7u, 3u, 6u, 4u, 5u, 6u, 7u, 6u, 5u
   };
 
   auto const quad_vb = create_buffer_for(quad_vertices);
+  auto const quad_ib = create_buffer_for(quad_indices);
   auto const cube_vb = create_buffer_for(cube_vertices);
   auto const cube_ib = create_buffer_for(cube_indices);
 
@@ -267,12 +278,12 @@ auto main() -> int {
 
   // BLAS for meshes
 
-  auto const quad_blas = make_blas(*quad_vb);
-  auto const cube_blas = make_blas(*cube_vb, cube_ib.get());
+  auto const quad_blas = make_blas(*quad_vb->GetBuffer(), quad_ib.get()->GetBuffer().get());
+  auto const cube_blas = make_blas(*cube_vb->GetBuffer(), cube_ib.get()->GetBuffer().get());
 
   // Init scene
 
-  wand::BufferDesc constexpr instance_buf_desc{
+  wand::BufferDesc constexpr rt_instance_buf_desc{
     .size = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * kNumInstances, .usage = wand::BufferUsage::kNone
   };
 
@@ -280,7 +291,7 @@ auto main() -> int {
   std::array<D3D12_RAYTRACING_INSTANCE_DESC*, kNumFramesInFlight> instance_data;
 
   for (auto i = 0u; i < kNumFramesInFlight; i++) {
-    instance_bufs[i] = ctx.device->CreateBuffer(instance_buf_desc, wand::CpuAccess::kWrite);
+    instance_bufs[i] = ctx.device->CreateBuffer(rt_instance_buf_desc, wand::CpuAccess::kWrite);
 
     instance_data[i] = reinterpret_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(instance_bufs[i]->Map());
 
@@ -294,6 +305,92 @@ auto main() -> int {
   }
 
   UpdateTransforms(instance_data[0]);
+
+  // Create gpu materials
+
+  auto const mtl_table_buf = wand::CreateBufferWithView(*ctx.device, wand::BufferDesc{
+    .size = kNumInstances * sizeof(GpuMaterial),
+    .usage = wand::BufferUsage::kShaderResource
+  }, wand::BufferViewDesc{
+    .region = {.offset = 0, .size = wand::kRemainingSize, .stride = sizeof(GpuMaterial)},
+    .usage = wand::BufferViewUsage::kShaderResource
+  }, wand::CpuAccess::kWrite);
+
+  {
+    auto constexpr materials = std::array{
+      // Cube
+      GpuMaterial{
+        .color = {1, 0, 0}, .is_reflective = false, .is_shadowed = false
+      },
+      // Mirror
+      GpuMaterial{
+        .color = {0, 0, 0}, .is_reflective = true, .is_shadowed = false
+      },
+      // Floor
+      GpuMaterial{
+        .color = {0.5, 0.5, 0.5}, .is_reflective = false, .is_shadowed = true
+      },
+    };
+    auto const mapped = mtl_table_buf->GetBuffer()->Map();
+    std::memcpy(mapped, materials.data(), sizeof(materials));
+    mtl_table_buf->GetBuffer()->Unmap();
+  }
+
+  // Create gpu geometries
+
+  auto const geom_table_buf = wand::CreateBufferWithView(*ctx.device, wand::BufferDesc{
+    .size = 2 * sizeof(GpuGeometry),
+    .usage = wand::BufferUsage::kShaderResource
+  }, wand::BufferViewDesc{
+    .region = {.offset = 0, .size = wand::kRemainingSize, .stride = sizeof(GpuGeometry)},
+    .usage = wand::BufferViewUsage::kShaderResource
+  }, wand::CpuAccess::kWrite);
+
+  {
+    auto const geometries = std::array{
+      // Cube
+      GpuGeometry{
+        .vtx_buf_srv = cube_vb->GetShaderResource(), .idx_buf_srv = cube_ib->GetShaderResource()
+      },
+      // Quad
+      GpuGeometry{
+        .vtx_buf_srv = quad_vb->GetShaderResource(), .idx_buf_srv = quad_ib->GetShaderResource()
+      },
+    };
+    auto const mapped = geom_table_buf->GetBuffer()->Map();
+    std::memcpy(mapped, geometries.data(), sizeof(geometries));
+    geom_table_buf->GetBuffer()->Unmap();
+  }
+
+  // Create gpu instances
+
+  auto const inst_table_buf = wand::CreateBufferWithView(*ctx.device, wand::BufferDesc{
+    .size = kNumInstances * sizeof(GpuInstance),
+    .usage = wand::BufferUsage::kShaderResource
+  }, wand::BufferViewDesc{
+    .region = {.offset = 0, .size = wand::kRemainingSize, .stride = sizeof(GpuInstance)},
+    .usage = wand::BufferViewUsage::kShaderResource
+  }, wand::CpuAccess::kWrite);
+
+  {
+    auto constexpr instances = std::array{
+      // Cube
+      GpuInstance{
+        .geom_idx = 0, .mtl_idx = 0
+      },
+      // Mirror
+      GpuInstance{
+        .geom_idx = 1, .mtl_idx = 1
+      },
+      // Floor
+      GpuInstance{
+        .geom_idx = 1, .mtl_idx = 2
+      }
+    };
+    auto const mapped = inst_table_buf->GetBuffer()->Map();
+    std::memcpy(mapped, instances.data(), sizeof(instances));
+    inst_table_buf->GetBuffer()->Unmap();
+  }
 
   // TLAS for scene
 
@@ -431,6 +528,9 @@ auto main() -> int {
       cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ComputeDispatchParams, target_uav), *ctx.render_target);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, width), rt_desc.width);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, height), rt_desc.height);
+      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, inst_table_srv), *inst_table_buf);
+      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, geom_table_srv), *geom_table_buf);
+      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, mtl_table_srv), *mtl_table_buf);
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
