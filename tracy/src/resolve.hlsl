@@ -10,6 +10,11 @@ float3 AgxDefaultContrastApprox(float3 const x) {
 }
 
 
+float3 Expose(float3 const color, float const exposure) {
+  return color * exposure;
+}
+
+
 float3 TonemapAgx(float3 color) {
   static float3x3 const agx_mtx =
   {
@@ -55,7 +60,8 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
   float3 const accum = accum_tex[dtid.xy];
   float3 const resolved = accum / g_params.sample_count;
-  float3 const tonemapped = TonemapAgx(resolved);
+  float3 const exposed = Expose(resolved, g_params.exposure);
+  float3 const tonemapped = TonemapAgx(exposed);
   float3 const gamma_corrected = GammaCorrect(tonemapped);
 
   RWTexture2D<float4> const target_tex = ResourceDescriptorHeap[g_params.target_uav];

@@ -1,3 +1,4 @@
+#include <bit>
 #include <cstdint>
 
 #include <DirectXMath.h>
@@ -32,6 +33,7 @@ constexpr UINT kMaxGpuQueuedFrames{1};
 constexpr auto kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
 constexpr auto kUseRayQuery = true;
 constexpr auto kAnimate = false;
+constexpr auto kExposure = 1.0f;
 
 
 struct RenderingContext {
@@ -606,6 +608,7 @@ auto main() -> int {
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, width), rt_desc.width);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, height), rt_desc.height);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, sample_count), ctx.sample_count);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, exposure), std::bit_cast<UINT>(kExposure));
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;

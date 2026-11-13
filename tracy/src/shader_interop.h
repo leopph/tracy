@@ -38,6 +38,7 @@ struct ResolveParams {
   uint target_uav;
   uint width;
   uint height;
+  float exposure;
 };
 
 
