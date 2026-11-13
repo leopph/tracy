@@ -1,3 +1,6 @@
+#include "shader_interop.h"
+
+
 struct Payload {
   float3 color;
   bool allow_reflection;
@@ -5,12 +8,7 @@ struct Payload {
 };
 
 
-struct Constants {
-  uint tlas_idx;
-  uint uav_idx;
-};
-
-ConstantBuffer<Constants> g_constants : register(b0, space0);
+ConstantBuffer<RayDispatchParams> g_constants : register(b0, space0);
 
 static float3 const camera = float3(0, 1.5, -7);
 static float3 const light = float3(0, 200, 0);
@@ -24,8 +22,8 @@ void RayGeneration() {
   float2 const size = DispatchRaysDimensions().xy;
   float2 const uv = idx / size;
   float3 const target = float3((uv.x * 2 - 1) * 1.8 * (size.x / size.y),
-                               (1 - uv.y) * 4 - 2 + camera.y,
-                               0);
+    (1 - uv.y) * 4 - 2 + camera.y,
+    0);
 
   RayDesc ray;
   ray.Origin = camera;
@@ -44,6 +42,7 @@ void RayGeneration() {
   uav[idx] = float4(payload.color, 1);
 }
 
+
 [shader("miss")]
 void Miss(inout Payload payload) {
   float const slope = normalize(WorldRayDirection()).y;
@@ -52,36 +51,39 @@ void Miss(inout Payload payload) {
   payload.missed = true;
 }
 
+
 void HitCube(inout Payload payload, float2 uv);
 void HitMirror(inout Payload payload, float2 uv);
 void HitFloor(inout Payload payload, float2 uv);
+
 
 [shader("closesthit")]
 void ClosestHit(inout Payload payload, BuiltInTriangleIntersectionAttributes attribs) {
   float2 const uv = attribs.barycentrics;
 
   switch (InstanceID()) {
-  case 0: {
-    HitCube(payload, uv);
-    break;
-  }
+    case 0: {
+      HitCube(payload, uv);
+      break;
+    }
 
-  case 1: {
-    HitMirror(payload, uv);
-    break;
-  }
+    case 1: {
+      HitMirror(payload, uv);
+      break;
+    }
 
-  case 2: {
-    HitFloor(payload, uv);
-    break;
-  }
+    case 2: {
+      HitFloor(payload, uv);
+      break;
+    }
 
-  default: {
-    payload.color = float3(1, 0, 1);
-    break;
-  }
+    default: {
+      payload.color = float3(1, 0, 1);
+      break;
+    }
   }
 }
+
 
 void HitCube(inout Payload payload, float2 uv) {
   uint const tri = PrimitiveIndex() / 2;
@@ -97,6 +99,7 @@ void HitCube(inout Payload payload, float2 uv) {
   payload.color = color;
   // payload.color = float3(uv, 0);
 }
+
 
 void HitMirror(inout Payload payload, float2 const uv) {
   if (!payload.allow_reflection) {
@@ -117,6 +120,7 @@ void HitMirror(inout Payload payload, float2 const uv) {
   RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_constants.tlas_idx];
   TraceRay(scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, mirror_ray, payload);
 }
+
 
 void HitFloor(inout Payload payload, float2 const uv) {
   float3 const pos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();

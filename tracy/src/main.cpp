@@ -1,9 +1,13 @@
 #include <DirectXMath.h>
 #include <wand/wand.hpp>
 
+#include "shader_interop.h"
+
 #ifndef NDEBUG
+#include "generated/Debug/shader.h"
 #include "generated/Debug/shader_lib.h"
 #else
+#include "generated/Release/shader.h"
 #include "generated/Release/shader_lib.h"
 #endif
 
@@ -22,6 +26,7 @@ using Vector = std::array<float, N>;
 
 constexpr UINT kMaxGpuQueuedFrames{1};
 constexpr auto kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
+constexpr auto kUseRayQuery = true;
 
 
 struct RenderingContext {
@@ -314,7 +319,9 @@ auto main() -> int {
     }, wand::CpuAccess::kNone
   );
 
-  // Create PSO
+  // Create PSOs
+
+  // Create RT PSO
 
   wand::RtStateObjectDesc pso_desc;
 
@@ -359,6 +366,12 @@ auto main() -> int {
     shader_table->Unmap();
   }
 
+  // Create CS PSO
+
+  auto const cs_pso = ctx.device->CreatePipelineState(wand::PipelineDesc{
+    .cs = CD3DX12_SHADER_BYTECODE{g_shader_bin, std::size(g_shader_bin)}
+  }, sizeof(ComputeDispatchParams) / 4);
+
   // Create fence for frame synchronization
   auto const frame_fence = ctx.device->CreateFence(0);
 
@@ -380,7 +393,8 @@ auto main() -> int {
 
     auto const frame_idx = frame_count % kNumFramesInFlight;
 
-    ctx.cmd_lists[frame_idx]->Begin(nullptr);
+    auto& cmd = *ctx.cmd_lists[frame_idx];
+    cmd.Begin(nullptr);
 
     // Update scene transforms
 
@@ -405,39 +419,51 @@ auto main() -> int {
       .scratch_buffer = wand::BufferRange{*tlas_update_scratch}
     };
 
-    ctx.cmd_lists[frame_idx]->BuildAccelerationStructure(tlas_update_desc);
+    cmd.BuildAccelerationStructure(tlas_update_desc);
 
     // Dispatch
 
-    ctx.cmd_lists[frame_idx]->SetRtState(*pso);
-    ctx.cmd_lists[frame_idx]->SetAccelerationStructure(0, *tlas);
-    ctx.cmd_lists[frame_idx]->SetUnorderedAccess(1, *ctx.render_target);
-
     auto const rt_desc = ctx.render_target->GetDesc();
 
-    ctx.cmd_lists[frame_idx]->DispatchRays(wand::DispatchRaysDesc{
-      .ray_generation_shader_record = wand::BufferRange{
-        *shader_table, wand::BufferRegion{.size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES}
-      },
-      .miss_shader_table = wand::BufferRange{
-        *shader_table,
-        wand::BufferRegion{
-          .offset = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
-        }
-      },
-      .hit_group_table = wand::BufferRange{
-        *shader_table, wand::BufferRegion{
-          .offset = 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
-        }
-      },
-      .width = rt_desc.width,
-      .height = rt_desc.height
-    });
+    if constexpr (kUseRayQuery) {
+      cmd.SetPipelineState(*cs_pso);
+      cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(ComputeDispatchParams, as_srv), *tlas);
+      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ComputeDispatchParams, target_uav), *ctx.render_target);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, width), rt_desc.width);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, height), rt_desc.height);
 
-    ctx.cmd_lists[frame_idx]->CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.render_target);
+      auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
+      auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
+      cmd.Dispatch(dispatch_x, dispatch_y, 1);
+    } else {
+      cmd.SetRtState(*pso);
+      cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(RayDispatchParams, tlas_idx), *tlas);
+      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(RayDispatchParams, uav_idx), *ctx.render_target);
 
-    ctx.cmd_lists[frame_idx]->End();
-    ctx.device->ExecuteCommandLists(std::span{ctx.cmd_lists[frame_idx].get(), 1});
+      cmd.DispatchRays(wand::DispatchRaysDesc{
+        .ray_generation_shader_record = wand::BufferRange{
+          *shader_table, wand::BufferRegion{.size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES}
+        },
+        .miss_shader_table = wand::BufferRange{
+          *shader_table,
+          wand::BufferRegion{
+            .offset = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+          }
+        },
+        .hit_group_table = wand::BufferRange{
+          *shader_table, wand::BufferRegion{
+            .offset = 2 * D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT, .size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+          }
+        },
+        .width = rt_desc.width,
+        .height = rt_desc.height
+      });
+    }
+
+    cmd.CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.render_target);
+
+    cmd.End();
+    ctx.device->ExecuteCommandLists(std::span{&cmd, 1});
 
     ctx.device->Present(*ctx.swap_chain);
 

@@ -74,10 +74,13 @@
     </Link>
     <FxCompile>
       <ShaderModel>6.6</ShaderModel>
-      <VariableName>g_shader_lib_bin</VariableName>
-      <HeaderFileOutput>$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
+      <VariableName>
+      </VariableName>
+      <HeaderFileOutput>
+      </HeaderFileOutput>
       <ObjectFileOutput />
-      <AdditionalOptions>/Qembed_debug %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/Qembed_debug -Wall %(AdditionalOptions)</AdditionalOptions>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </FxCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -98,18 +101,34 @@
     </Link>
     <FxCompile>
       <ShaderModel>6.6</ShaderModel>
-      <VariableName>g_shader_lib_bin</VariableName>
-      <HeaderFileOutput>$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
+      <VariableName>
+      </VariableName>
+      <HeaderFileOutput>
+      </HeaderFileOutput>
       <ObjectFileOutput />
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <AdditionalOptions>/Qembed_debug -Wall %(AdditionalOptions)</AdditionalOptions>
     </FxCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="src\shader.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_shader_bin</VariableName>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_shader_bin</VariableName>
+    </FxCompile>
     <FxCompile Include="src\shader_lib.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Library</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Library</ShaderType>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_shader_lib_bin</VariableName>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_shader_lib_bin</VariableName>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
     </FxCompile>
   </ItemGroup>
   <ItemGroup>
@@ -120,6 +139,9 @@
     <ProjectReference Include="..\deps\wand\wand\wand.vcxproj">
       <Project>{f91f1551-40d1-4c76-af68-ade75caf8cb7}</Project>
     </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\shader_interop.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
