@@ -1,11 +1,46 @@
+#include "pcg4d.hlsli"
 #include "shader_interop.h"
+#include "utility.hlsli"
 
 ConstantBuffer<ComputeDispatchParams> g_params : register(b0);
 
-static float3 const camera = float3(0, 1.5, -7);
-static float3 const light = float3(0, 200, 0);
+static float3 const cam_pos_ws = float3(0, 1.5, -7);
 static float3 const sky_top = float3(0.24, 0.44, 0.72);
 static float3 const sky_bottom = float3(0.75, 0.86, 0.93);
+static uint const kMaxBounces = 8;
+static float const PI = 3.14159265359f;
+
+
+float3 SampleCosineMalley(float const random1, float const random2) {
+  float const r = sqrt(random1);
+  float const theta = 2.0f * PI * random2;
+
+  float const x = r * cos(theta);
+  float const y = r * sin(theta);
+  float const z = sqrt(max(0.0f, 1.0f - random1));
+
+  return float3(x, y, z);
+}
+
+
+// normal must be normalized.
+void OnbDuff(float3 const normal, out float3 tangent, out float3 bitangent) {
+  float s = (normal.z >= 0.0f) ? 1.0f : -1.0f;
+  float a = -1.0f / (s + normal.z);
+  float b = normal.x * normal.y * a;
+
+  tangent = float3(
+    1.0f + s * normal.x * normal.x * a,
+    s * b,
+    -s * normal.x
+  );
+
+  bitangent = float3(
+    b,
+    s + normal.y * normal.y * a,
+    -normal.y
+  );
+}
 
 
 [numthreads(COMPUTE_SHADER_TILE_DIM, COMPUTE_SHADER_TILE_DIM, 1)]
@@ -19,18 +54,18 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
   float2 const uv = idx / size;
   float3 const target = float3(
     (uv.x * 2 - 1) * 1.8 * (size.x / size.y),
-    (1 - uv.y) * 4 - 2 + camera.y,
+    (1 - uv.y) * 4 - 2 + cam_pos_ws.y,
     0
   );
 
   RayDesc cam_ray;
-  cam_ray.Origin = camera;
-  cam_ray.Direction = target - camera;
+  cam_ray.Origin = cam_pos_ws;
+  cam_ray.Direction = target - cam_pos_ws;
   cam_ray.TMin = 0.001;
   cam_ray.TMax = 1000;
 
-  float3 color = float3(0, 0, 0);
-  bool allow_reflection = true;
+  float3 radiance = float3(0, 0, 0);
+  float3 throughput = float3(1, 1, 1);
 
   RaytracingAccelerationStructure const as = ResourceDescriptorHeap[g_params.as_srv];
 
@@ -54,7 +89,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
   bool run_ray_loop = true;
 
-  while (run_ray_loop) {
+  for (uint bounce = 0; run_ray_loop && bounce < kMaxBounces; ++bounce) {
     q.Proceed(); // Forcing opaque so single call is enough
 
     switch (q.CommittedStatus()) {
@@ -62,14 +97,15 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
       case COMMITTED_NOTHING: {
         float const slope = normalize(q.WorldRayDirection()).y;
         float const t = saturate(slope * 5 + 0.5);
-        color = lerp(sky_bottom, sky_top, t);
+        float3 const emission = lerp(sky_bottom, sky_top, t);
+        radiance += throughput * emission;
         run_ray_loop = false;
         break;
       }
 
       case COMMITTED_PROCEDURAL_PRIMITIVE_HIT: {
         // This shouldn't be hit since we don't have procedural primitives
-        color = float3(1, 0, 1); // display error color
+        radiance = float3(1, 0, 1); // display error color
         run_ray_loop = false;
         break;
       }
@@ -79,7 +115,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         if (inst_idx >= inst_count) {
           // This shouldn't happen
-          color = float3(1, 0, 1); // display error color
+          radiance = float3(1, 0, 1); // display error color
           run_ray_loop = false;
           break;
         }
@@ -88,7 +124,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         if (inst.geom_idx >= geom_count || inst.mtl_idx >= mtl_count) {
           // This shouldn't happen
-          color = float3(1, 0, 1); // display error color
+          radiance = float3(1, 0, 1); // display error color
           run_ray_loop = false;
           break;
         }
@@ -104,7 +140,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         if (index_positions.z >= index_count) {
           // This shouldn't happpen
-          color = float3(1, 0, 1); // display error color
+          radiance = float3(1, 0, 1); // display error color
           run_ray_loop = false;
           break;
         }
@@ -119,7 +155,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         if (prim_indices.x >= vertex_count || prim_indices.y >= vertex_count || prim_indices.z >= vertex_count) {
           // This shouldn't happen
-          color = float3(1, 0, 1); // display error color
+          radiance = float3(1, 0, 1); // display error color
           run_ray_loop = false;
           break;
         }
@@ -130,48 +166,51 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
         float3 const vtx1 = vertices[prim_indices.y];
         float3 const vtx2 = vertices[prim_indices.z];
         float3 const normal_os = normalize(cross(vtx2 - vtx0, vtx1 - vtx0));
-        float3 const normal_ws = normalize(mul(normal_os, (float3x3)q.CommittedObjectToWorld4x3()));
+        float3 normal_ws = normalize(mul(normal_os, (float3x3)q.CommittedObjectToWorld4x3()));
+
+        // Have the normal always be on the same side of the triangle the ray hits it
+        if (dot(normal_ws, q.WorldRayDirection()) > 0) {
+          normal_ws = -normal_ws;
+        }
 
         GpuMaterial const mtl = materials[inst.mtl_idx];
-        color += mtl.color * (saturate(dot(normal_ws, normalize(light))) + 0.33);
+        radiance += throughput * mtl.emission;
+        throughput *= mtl.base_color;
 
-        if (mtl.is_reflective && allow_reflection) {
-          float3 const reflection_ray_dir = reflect(normalize(q.WorldRayDirection()), normal_ws);
+        // Set up a continuation ray
+        RayDesc next_ray;
+        next_ray.Origin = pos;
+        next_ray.TMin = 0.001;
+        next_ray.TMax = 1000;
 
-          RayDesc mirror_ray;
-          mirror_ray.Origin = pos;
-          mirror_ray.Direction = reflection_ray_dir;
-          mirror_ray.TMin = 0.001;
-          mirror_ray.TMax = 1000;
+        if (mtl.is_reflective) {
+          // If the material is reflective, we're tracing a specular bounce
+          // is_reflective == (metallic == 1 && roughness == 0)
 
-          allow_reflection = false;
-          q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, mirror_ray);
-          break;
+          float3 const refl_dir_ws = reflect(normalize(q.WorldRayDirection()), normal_ws);
+          next_ray.Direction = refl_dir_ws;
+        } else {
+          // Otherwise we're tracing a diffuse bounce
+
+          uint4 const pcg = pcg4d(uint4(dtid.xy, g_params.sample_count, bounce));
+          float3 const refl_dir_ts = SampleCosineMalley(UintToFloat(pcg.x), UintToFloat(pcg.y));
+
+          float3 tanget_ws;
+          float3 bitangent_ws;
+          OnbDuff(normal_ws, tanget_ws, bitangent_ws);
+
+          float3x3 const tangent_to_world = float3x3(tanget_ws, bitangent_ws, normal_ws);
+          float3 const refl_dir_ws = mul(refl_dir_ts, tangent_to_world);
+          next_ray.Direction = refl_dir_ws;
         }
 
-        if (mtl.is_shadowed) {
-          RayDesc shadow_ray;
-          shadow_ray.Origin = pos;
-          shadow_ray.Direction = light - pos;
-          shadow_ray.TMin = 0.001;
-          shadow_ray.TMax = 1;
-
-          RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE> sq;
-          sq.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, shadow_ray);
-          sq.Proceed();
-
-          if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-            color /= 2;
-          }
-        }
-
-        run_ray_loop = false;
+        q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, next_ray);
         break;
       }
 
       default: {
         // This shouldn't be hit since we've exhausted all possible commit status values
-        color = float3(1, 1, 0); // display error color
+        radiance = float3(1, 1, 0); // display error color
         run_ray_loop = false;
         break;
       }
@@ -179,5 +218,5 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
   }
 
   RWTexture2D<float4> uav = ResourceDescriptorHeap[g_params.target_uav];
-  uav[idx] += float4(color, 1);
+  uav[idx] += float4(radiance, 1);
 }

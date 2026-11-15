@@ -23,6 +23,7 @@ struct ComputeDispatchParams {
   uint inst_table_srv;
   uint geom_table_srv;
   uint mtl_table_srv;
+  uint sample_count;
 };
 
 
@@ -55,9 +56,9 @@ struct GpuGeometry {
 
 
 struct GpuMaterial {
-  float3 color;
+  float3 base_color;
+  float3 emission;
   BOOL is_reflective;
-  BOOL is_shadowed;
 };
 
 

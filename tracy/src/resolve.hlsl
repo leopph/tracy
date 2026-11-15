@@ -54,9 +54,6 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
   }
 
   Texture2D<float3> const accum_tex = ResourceDescriptorHeap[g_params.accum_srv];
-  uint2 accum_tex_size;
-  uint accum_tex_levels;
-  accum_tex.GetDimensions(0, accum_tex_size.x, accum_tex_size.y, accum_tex_levels);
 
   float3 const accum = accum_tex[dtid.xy];
   float3 const resolved = accum / g_params.sample_count;

@@ -8,12 +8,12 @@
 
 #ifndef NDEBUG
 #include "generated/Debug/resolve.h"
-#include "generated/Debug/shader.h"
 #include "generated/Debug/shader_lib.h"
+#include "generated/Debug/tracer.h"
 #else
 #include "generated/Release/resolve.h"
-#include "generated/Release/shader.h"
 #include "generated/Release/shader_lib.h"
+#include "generated/Release/tracer.h"
 #endif
 
 import std;
@@ -43,6 +43,7 @@ struct RenderingContext {
   wand::SharedDeviceHandle<wand::Texture> accum_tex;
   wand::SharedDeviceHandle<wand::Texture> resolve_tex;
   std::uint32_t sample_count{0};
+  bool reset_requested{true};
 };
 
 
@@ -91,13 +92,20 @@ auto Resize(HWND const hwnd) -> void {
   ctx->device->WaitIdle();
   ctx->device->ResizeSwapChain(*ctx->swap_chain, width, height);
 
+  auto constexpr accum_tex_format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+
   ctx->accum_tex = ctx->device->CreateTexture(
     wand::TextureDesc{
       .dimension = wand::TextureDimension::k2D, .width = width, .height = height, .depth_or_array_size = 1,
-      .mip_levels = 1, .format = DXGI_FORMAT_R32G32B32A32_FLOAT, .sample_count = 1,
+      .mip_levels = 1, .format = accum_tex_format, .sample_count = 1,
       .component_mapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .depth_stencil = false,
       .render_target = true, .shader_resource = true, .unordered_access = true
-    }, wand::CpuAccess::kNone, nullptr);
+    }, wand::CpuAccess::kNone, std::array{
+      D3D12_CLEAR_VALUE{
+        .Format = accum_tex_format,
+        .Color = {0.0f, 0.0f, 0.0f, 1.0f}
+      }
+    }.data());
 
   ctx->resolve_tex = ctx->device->CreateTexture(
     wand::TextureDesc{
@@ -106,6 +114,8 @@ auto Resize(HWND const hwnd) -> void {
       .component_mapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, .depth_stencil = false,
       .render_target = false, .shader_resource = false, .unordered_access = true
     }, wand::CpuAccess::kNone, nullptr);
+
+  ctx->reset_requested = true;
 }
 
 
@@ -147,12 +157,6 @@ auto WINAPI WndProc(HWND const hwnd, UINT const msg, WPARAM const wparam, LPARAM
       return DefWindowProcW(hwnd, msg, wparam, lparam);
     }
   }
-}
-
-
-[[nodiscard]]
-auto IsResetRequested() -> bool {
-  return false;
 }
 
 
@@ -343,15 +347,15 @@ auto main() -> int {
     auto constexpr materials = std::array{
       // Cube
       GpuMaterial{
-        .color = {1, 0, 0}, .is_reflective = false, .is_shadowed = false
+        .base_color = {1.0f, 0.0f, 0.0f}, .emission = {}, .is_reflective = false
       },
       // Mirror
       GpuMaterial{
-        .color = {0, 0, 0}, .is_reflective = true, .is_shadowed = false
+        .base_color = {1.0f, 1.0f, 1.0f}, .emission = {}, .is_reflective = true
       },
       // Floor
       GpuMaterial{
-        .color = {0.5, 0.5, 0.5}, .is_reflective = false, .is_shadowed = true
+        .base_color = {0.5f, 0.5f, 0.5f}, .emission = {}, .is_reflective = false
       },
     };
     auto const mapped = mtl_table_buf->GetBuffer()->Map();
@@ -489,7 +493,7 @@ auto main() -> int {
   // Create CS PSO
 
   auto const cs_pso = ctx.device->CreatePipelineState(wand::PipelineDesc{
-    .cs = CD3DX12_SHADER_BYTECODE{g_shader_bin, std::size(g_shader_bin)}
+    .cs = CD3DX12_SHADER_BYTECODE{g_tracer_cs_bin, std::size(g_tracer_cs_bin)}
   }, sizeof(ComputeDispatchParams) / 4);
 
   // Create resolve PSO
@@ -524,14 +528,11 @@ auto main() -> int {
 
     // Handle accumulation reset
 
-    if (IsResetRequested()) {
+    if (ctx.reset_requested) {
       cmd.ClearRenderTarget(*ctx.accum_tex, std::array{0.0f, 0.0f, 0.0f, 1.0f}, {});
       ctx.sample_count = 0;
+      ctx.reset_requested = false;
     }
-
-    // Increase sample count to account for this frame
-
-    ++ctx.sample_count;
 
     // Update scene transforms
 
@@ -571,6 +572,7 @@ auto main() -> int {
       cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, inst_table_srv), *inst_table_buf);
       cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, geom_table_srv), *geom_table_buf);
       cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, mtl_table_srv), *mtl_table_buf);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sample_count), ctx.sample_count);
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
@@ -599,6 +601,11 @@ auto main() -> int {
         .height = rt_desc.height
       });
     }
+
+
+    // Increase sample count to account for this frame
+
+    ++ctx.sample_count;
 
     // Resolve pass
     {

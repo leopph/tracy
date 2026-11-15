@@ -21,12 +21,14 @@
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="src\shader_lib.hlsl" />
-    <FxCompile Include="src\shader.hlsl" />
+    <FxCompile Include="src\tracer.hlsl" />
     <FxCompile Include="src\resolve.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="vcpkg.json" />
     <None Include="packages.config" />
+    <None Include="src\pcg4d.hlsli" />
+    <None Include="src\utility.hlsli" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\shader_interop.h">
