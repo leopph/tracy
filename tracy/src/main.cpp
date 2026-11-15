@@ -391,15 +391,15 @@ auto main() -> int {
   auto materials = std::array{
     tracy::MaterialSettings{
       .name = "Cube", .base_color = {1.0f, 0.0f, 0.0f}, .metallic = 0.0f, .roughness = 0.5f,
-      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f, .is_reflective = false
+      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f
     },
     tracy::MaterialSettings{
       .name = "Mirror", .base_color = {1.0f, 1.0f, 1.0f}, .metallic = 1.0f, .roughness = 0.0f,
-      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f, .is_reflective = true
+      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f
     },
     tracy::MaterialSettings{
       .name = "Floor", .base_color = {0.5f, 0.5f, 0.5f}, .metallic = 0.0f, .roughness = 0.5f,
-      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f, .is_reflective = false
+      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f
     },
   };
 
@@ -417,8 +417,7 @@ auto main() -> int {
           mtl.emission_color[1] * mtl.emission_strength,
           mtl.emission_color[2] * mtl.emission_strength
         },
-        .roughness = mtl.roughness,
-        .is_reflective = mtl.is_reflective ? 1u : 0u
+        .roughness = mtl.roughness
       };
     }
 

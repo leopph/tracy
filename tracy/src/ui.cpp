@@ -83,7 +83,6 @@ auto DrawMaterialsUi(std::span<MaterialSettings> const materials) -> bool {
       changed |= ImGui::ColorEdit3("Emission color", mtl.emission_color.data(), ImGuiColorEditFlags_Float);
       changed |= ImGui::DragFloat("Emission strength", &mtl.emission_strength, 0.05f, 0.0f, 1000.0f, "%.2f",
         ImGuiSliderFlags_AlwaysClamp);
-      changed |= ImGui::Checkbox("Reflective (temporary)", &mtl.is_reflective);
     }
 
     ImGui::PopID();

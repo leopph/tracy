@@ -37,6 +37,7 @@
     <None Include="src\shaders\pcg4d.hlsli" />
     <None Include="src\shaders\utility.hlsli" />
     <None Include="src\shaders\imgui.hlsli" />
+    <None Include="src\shaders\brdf.hlsli" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\shaders\shader_interop.h">

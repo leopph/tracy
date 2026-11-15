@@ -75,13 +75,11 @@ struct GpuGeometry {
 };
 
 
-// StructuredBuffer element, so it is tightly packed; the cbuffer 16-byte rules don't apply here
 struct GpuMaterial {
   float3 base_color;
   float metallic;
   float3 emission;
   float roughness;
-  BOOL is_reflective; // Temporary, until the BRDF uses metallic/roughness
 };
 
 

@@ -143,6 +143,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="src\shaders\brdf.hlsli" />
     <None Include="src\shaders\imgui.hlsli" />
     <None Include="src\shaders\pcg4d.hlsli" />
     <None Include="src\shaders\utility.hlsli" />

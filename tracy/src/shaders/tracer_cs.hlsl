@@ -1,3 +1,4 @@
+#include "brdf.hlsli"
 #include "pcg4d.hlsli"
 #include "shader_interop.h"
 #include "utility.hlsli"
@@ -5,30 +6,17 @@
 ConstantBuffer<ComputeDispatchParams> g_params : register(b0);
 
 static float3 const cam_pos_ws = float3(0, 1.5, -7);
-static float const PI = 3.14159265359f;
 
 
 float3 SampleSkyRadiance(float3 const ray_dir) {
   // The solid angle of the sun disk in steradians (sr)
-  float const sun_solid_angle = 2 * PI * (1 - g_params.sun_radius_cos);
+  float const sun_solid_angle = 2 * kPi * (1 - g_params.sun_radius_cos);
   float const sun_cutoff = dot(ray_dir, g_params.dir_to_sun) > g_params.sun_radius_cos;
   float const sun_radiance = g_params.sun_irradiance / sun_solid_angle;
   float3 const sun = sun_radiance * g_params.sun_tint * sun_cutoff;
   float3 const sky_tint = lerp(g_params.sky_horizon_tint, g_params.sky_zenith_tint, saturate(ray_dir.y));
   float3 const atmos = g_params.sky_radiance * sky_tint;
   return sun + atmos;
-}
-
-
-float3 SampleCosineMalley(float const random1, float const random2) {
-  float const r = sqrt(random1);
-  float const theta = 2.0f * PI * random2;
-
-  float const x = r * cos(theta);
-  float const y = r * sin(theta);
-  float const z = sqrt(max(0.0f, 1.0f - random1));
-
-  return float3(x, y, z);
 }
 
 
@@ -69,7 +57,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
   RayDesc cam_ray;
   cam_ray.Origin = cam_pos_ws;
-  cam_ray.Direction = target - cam_pos_ws;
+  cam_ray.Direction = normalize(target - cam_pos_ws);
   cam_ray.TMin = 0.001;
   cam_ray.TMax = 1000;
 
@@ -167,7 +155,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
           break;
         }
 
-        float3 const pos = q.WorldRayOrigin() + q.WorldRayDirection() * q.CommittedRayT();
+        float3 const pos_ws = q.WorldRayOrigin() + q.WorldRayDirection() * q.CommittedRayT();
 
         float3 const vtx0 = vertices[prim_indices.x];
         float3 const vtx1 = vertices[prim_indices.y];
@@ -182,10 +170,70 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         GpuMaterial const mtl = materials[inst.mtl_idx];
         radiance += throughput * mtl.emission;
-        throughput *= mtl.base_color;
+
+        // Extract material properties
+
+        float3 const F0 = CalcF0(mtl.base_color, mtl.metallic);
+        float3 const diffuse_albedo = CalcDiffuseAlbedo(mtl.base_color, mtl.metallic);
+        float const alpha = AlphaFromRoughness(mtl.roughness);
+
+        // Build orthonormal basis
+
+        float3 tanget_ws;
+        float3 bitangent_ws;
+        OnbDuff(normal_ws, tanget_ws, bitangent_ws);
+        float3x3 const tangent_to_world = float3x3(tanget_ws, bitangent_ws, normal_ws);
+
+        float3 const view_ws = -q.WorldRayDirection();
+        float3 const view_ts = mul(tangent_to_world, view_ws);
+        float3 l_ts;
 
         // Random numbers
         uint4 const pcg = pcg4d(uint4(dtid.xy, g_params.sample_count, bounce));
+
+        // 50 percent chance to trace a specular ray, 50 to trace a diffuse one
+        float const p_spec = 0.5;
+
+        if (UintToFloat(pcg.w) < p_spec) {
+          // Specular
+          float3 const h_ts = SampleGgxVndf(view_ts, alpha, alpha, UintToFloat(pcg.x), UintToFloat(pcg.y));
+          l_ts = reflect(-view_ts, h_ts);
+        } else {
+          // Diffuse
+          l_ts = SampleCosineMalley(UintToFloat(pcg.x), UintToFloat(pcg.y));
+        }
+
+        float3 const n_ts = float3(0, 0, 1);
+
+        // If we sampled a reflection direction on the other side of the triangle, end the path
+        if (dot(n_ts, l_ts) <= 0) {
+          run_ray_loop = false;
+          break;
+        }
+
+        float3 const h = normalize(view_ts + l_ts);
+        float const n_dot_h = saturate(dot(n_ts, h));
+        float const n_dot_v = saturate(dot(n_ts, view_ts));
+        float const n_dot_l = saturate(dot(n_ts, l_ts));
+        float const v_dot_h = saturate(dot(view_ts, h));
+
+        float const D = DistributionTrowbridgeReitz(n_dot_h, alpha);
+        float const G = SmithG2SeparableGgx(n_dot_v, n_dot_l, alpha);
+        float3 const F = FresnelSchlick(v_dot_h, F0);
+
+        // How strongly light arriving from l is specularly reflected toward v
+        float3 const f_spec = (D * G * F) / (4.0 * n_dot_v * n_dot_l);
+        // How strongly light arriving from l that enters the surface and scatters back out goes toward v
+        float3 const f_diff = (1 - F) * diffuse_albedo / kPi;
+        float3 const f = f_spec + f_diff;
+
+        // Density with which the specular sampler picks l
+        float const pdf_spec = GgxVndfPdf(view_ts, h, l_ts, alpha);
+        // Density with which the diffuse sampler picks l
+        float const pdf_diff = MalleyPdf(l_ts);
+        // Density with which this bounce picks l overall
+        float const pdf = p_spec * pdf_spec + (1 - p_spec) * pdf_diff;
+        throughput *= f * n_dot_l / pdf;
 
         // Russian roulette: end the path with some probability based on throughput.
         // Skipped for the first bounces, which carry most of the energy.
@@ -203,29 +251,10 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         // Set up a continuation ray
         RayDesc next_ray;
-        next_ray.Origin = pos;
+        next_ray.Origin = pos_ws;
+        next_ray.Direction = mul(l_ts, tangent_to_world);
         next_ray.TMin = 0.001;
         next_ray.TMax = 1000;
-
-        if (mtl.is_reflective) {
-          // If the material is reflective, we're tracing a specular bounce
-          // is_reflective == (metallic == 1 && roughness == 0)
-
-          float3 const refl_dir_ws = reflect(normalize(q.WorldRayDirection()), normal_ws);
-          next_ray.Direction = refl_dir_ws;
-        } else {
-          // Otherwise we're tracing a diffuse bounce
-
-          float3 const refl_dir_ts = SampleCosineMalley(UintToFloat(pcg.x), UintToFloat(pcg.y));
-
-          float3 tanget_ws;
-          float3 bitangent_ws;
-          OnbDuff(normal_ws, tanget_ws, bitangent_ws);
-
-          float3x3 const tangent_to_world = float3x3(tanget_ws, bitangent_ws, normal_ws);
-          float3 const refl_dir_ws = mul(refl_dir_ts, tangent_to_world);
-          next_ray.Direction = refl_dir_ws;
-        }
 
         q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, next_ray);
         break;

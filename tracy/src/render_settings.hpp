@@ -29,7 +29,6 @@ struct MaterialSettings {
   float roughness;
   std::array<float, 3> emission_color;
   float emission_strength;
-  bool is_reflective;
 };
 
 
