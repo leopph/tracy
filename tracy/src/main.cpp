@@ -33,7 +33,7 @@ constexpr UINT kMaxGpuQueuedFrames{1};
 constexpr auto kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
 constexpr auto kUseRayQuery = true;
 constexpr auto kAnimate = false;
-constexpr auto kExposure = 1.0f;
+constexpr auto kExposure = 0.4f;
 
 
 struct RenderingContext {
