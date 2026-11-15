@@ -242,6 +242,8 @@ auto main() -> int {
       .radiance = 1.0f,
     },
     .max_bounces = 8,
+    .rr_start_bounce = 3,
+    .rr_enabled = true,
   };
 
   // Init meshes
@@ -662,6 +664,10 @@ auto main() -> int {
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_radius_cos),
         as_uint(std::cos(settings.sun.radius)));
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, max_bounces), settings.max_bounces);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, rr_start_bounce),
+        settings.rr_start_bounce);
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, rr_enabled),
+        settings.rr_enabled ? 1u : 0u);
 
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;

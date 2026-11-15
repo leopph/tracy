@@ -25,5 +25,7 @@ struct RenderSettings {
   SunSettings sun;
   SkySettings sky;
   std::uint32_t max_bounces;
+  std::uint32_t rr_start_bounce;
+  bool rr_enabled;
 };
 }

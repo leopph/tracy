@@ -51,6 +51,11 @@ auto DrawSettingsUi(RenderSettings& settings, RenderStats const& stats) -> UiDra
     auto constexpr max_bounces = std::uint32_t{32};
     changed |= ImGui::SliderScalar("Max bounces", ImGuiDataType_U32, &settings.max_bounces, &min_bounces,
       &max_bounces, nullptr, ImGuiSliderFlags_AlwaysClamp);
+    changed |= ImGui::Checkbox("Russian roulette", &settings.rr_enabled);
+    ImGui::BeginDisabled(!settings.rr_enabled);
+    changed |= ImGui::SliderScalar("RR start bounce", ImGuiDataType_U32, &settings.rr_start_bounce, &min_bounces,
+      &max_bounces, nullptr, ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
   }
 
   ImGui::End();

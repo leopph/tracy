@@ -41,6 +41,9 @@ struct ComputeDispatchParams {
 
   float3 sun_tint;
   float sun_radius_cos;
+
+  uint rr_start_bounce;
+  BOOL rr_enabled;
 };
 
 

@@ -184,6 +184,23 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
         radiance += throughput * mtl.emission;
         throughput *= mtl.base_color;
 
+        // Random numbers
+        uint4 const pcg = pcg4d(uint4(dtid.xy, g_params.sample_count, bounce));
+
+        // Russian roulette: end the path with some probability based on throughput.
+        // Skipped for the first bounces, which carry most of the energy.
+
+        if (g_params.rr_enabled && bounce >= g_params.rr_start_bounce) {
+          float const survival = max(max(max(throughput.r, throughput.g), throughput.b), 0.05);
+
+          if (UintToFloat(pcg.z) >= survival) {
+            run_ray_loop = false;
+            break;
+          }
+
+          throughput /= survival;
+        }
+
         // Set up a continuation ray
         RayDesc next_ray;
         next_ray.Origin = pos;
@@ -199,7 +216,6 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
         } else {
           // Otherwise we're tracing a diffuse bounce
 
-          uint4 const pcg = pcg4d(uint4(dtid.xy, g_params.sample_count, bounce));
           float3 const refl_dir_ts = SampleCosineMalley(UintToFloat(pcg.x), UintToFloat(pcg.y));
 
           float3 tanget_ws;
