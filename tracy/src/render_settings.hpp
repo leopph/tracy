@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 
 namespace tracy {
@@ -18,6 +19,17 @@ struct SkySettings {
   std::array<float, 3> zenith_tint;
   std::array<float, 3> horizon_tint;
   float radiance;
+};
+
+
+struct MaterialSettings {
+  std::string name;
+  std::array<float, 3> base_color;
+  float metallic;
+  float roughness;
+  std::array<float, 3> emission_color;
+  float emission_strength;
+  bool is_reflective;
 };
 
 

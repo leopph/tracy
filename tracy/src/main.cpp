@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <ranges>
 
 #include <DirectXMath.h>
 #include <imgui.h>
@@ -386,25 +387,47 @@ auto main() -> int {
     .usage = wand::BufferViewUsage::kShaderResource
   }, wand::CpuAccess::kWrite);
 
-  {
-    auto constexpr materials = std::array{
-      // Cube
-      GpuMaterial{
-        .base_color = {1.0f, 0.0f, 0.0f}, .emission = {}, .is_reflective = false
-      },
-      // Mirror
-      GpuMaterial{
-        .base_color = {1.0f, 1.0f, 1.0f}, .emission = {}, .is_reflective = true
-      },
-      // Floor
-      GpuMaterial{
-        .base_color = {0.5f, 0.5f, 0.5f}, .emission = {}, .is_reflective = false
-      },
-    };
+  // Indexed by GpuInstance::mtl_idx
+  auto materials = std::array{
+    tracy::MaterialSettings{
+      .name = "Cube", .base_color = {1.0f, 0.0f, 0.0f}, .metallic = 0.0f, .roughness = 0.5f,
+      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f, .is_reflective = false
+    },
+    tracy::MaterialSettings{
+      .name = "Mirror", .base_color = {1.0f, 1.0f, 1.0f}, .metallic = 1.0f, .roughness = 0.0f,
+      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f, .is_reflective = true
+    },
+    tracy::MaterialSettings{
+      .name = "Floor", .base_color = {0.5f, 0.5f, 0.5f}, .metallic = 0.0f, .roughness = 0.5f,
+      .emission_color = {1.0f, 1.0f, 1.0f}, .emission_strength = 0.0f, .is_reflective = false
+    },
+  };
+
+  static_assert(materials.size() == kNumInstances);
+
+  auto const upload_materials = [&materials, &mtl_table_buf] {
+    auto gpu_materials = std::array<GpuMaterial, kNumInstances>{};
+
+    for (auto [mtl, gpu_mtl] : std::views::zip(materials, gpu_materials)) {
+      gpu_mtl = GpuMaterial{
+        .base_color = mtl.base_color,
+        .metallic = mtl.metallic,
+        .emission = {
+          mtl.emission_color[0] * mtl.emission_strength,
+          mtl.emission_color[1] * mtl.emission_strength,
+          mtl.emission_color[2] * mtl.emission_strength
+        },
+        .roughness = mtl.roughness,
+        .is_reflective = mtl.is_reflective ? 1u : 0u
+      };
+    }
+
     auto const mapped = mtl_table_buf->GetBuffer()->Map();
-    std::memcpy(mapped, materials.data(), sizeof(materials));
+    std::memcpy(mapped, gpu_materials.data(), sizeof(gpu_materials));
     mtl_table_buf->GetBuffer()->Unmap();
-  }
+  };
+
+  upload_materials();
 
   // Create gpu geometries
 
@@ -577,6 +600,12 @@ auto main() -> int {
     if (tracy::DrawSettingsUi(settings, tracy::RenderStats{
       .sample_count = ctx.sample_count, .accumulation_seconds = accumulation_seconds
     }).reset_accumulation) {
+      ctx.reset_requested = true;
+    }
+
+    if (tracy::DrawMaterialsUi(materials)) {
+      ctx.device->WaitIdle();
+      upload_materials();
       ctx.reset_requested = true;
     }
 

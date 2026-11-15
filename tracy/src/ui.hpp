@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "render_settings.hpp"
 
@@ -18,4 +19,7 @@ struct UiDrawResult {
 
 
 auto DrawSettingsUi(RenderSettings& settings, RenderStats const& stats) -> UiDrawResult;
+
+// Returns true if any material changed. Changed materials need to be re-uploaded and accumulation reset.
+auto DrawMaterialsUi(std::span<MaterialSettings> materials) -> bool;
 }

@@ -62,4 +62,35 @@ auto DrawSettingsUi(RenderSettings& settings, RenderStats const& stats) -> UiDra
 
   return UiDrawResult{.reset_accumulation = changed};
 }
+
+
+auto DrawMaterialsUi(std::span<MaterialSettings> const materials) -> bool {
+  auto changed = false;
+
+  // New windows all open at the same spot, so put this one on the right instead of on top of Settings
+  ImGui::SetNextWindowPos({ImGui::GetIO().DisplaySize.x - 380.0f, 20.0f}, ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize({360, 0}, ImGuiCond_FirstUseEver);
+  ImGui::Begin("Materials");
+
+  for (auto i = 0uz; i < materials.size(); i++) {
+    auto& mtl = materials[i];
+    ImGui::PushID(static_cast<int>(i));
+
+    if (ImGui::CollapsingHeader(mtl.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+      changed |= ImGui::ColorEdit3("Base color", mtl.base_color.data(), ImGuiColorEditFlags_Float);
+      changed |= ImGui::SliderFloat("Metallic", &mtl.metallic, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      changed |= ImGui::SliderFloat("Roughness", &mtl.roughness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+      changed |= ImGui::ColorEdit3("Emission color", mtl.emission_color.data(), ImGuiColorEditFlags_Float);
+      changed |= ImGui::DragFloat("Emission strength", &mtl.emission_strength, 0.05f, 0.0f, 1000.0f, "%.2f",
+        ImGuiSliderFlags_AlwaysClamp);
+      changed |= ImGui::Checkbox("Reflective (temporary)", &mtl.is_reflective);
+    }
+
+    ImGui::PopID();
+  }
+
+  ImGui::End();
+
+  return changed;
+}
 }
