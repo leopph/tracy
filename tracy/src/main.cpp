@@ -45,7 +45,6 @@ constexpr UINT kMaxGpuQueuedFrames{1};
 constexpr auto kNumFramesInFlight{kMaxGpuQueuedFrames + 1};
 constexpr auto kUseRayQuery = true;
 constexpr auto kAnimate = false;
-constexpr auto kExposure = 0.4f;
 
 
 struct RenderingContext {
@@ -230,6 +229,9 @@ auto main() -> int {
   ImGuiRenderer imgui_renderer{*ctx.device, *ctx.swap_chain};
 
   tracy::RenderSettings settings{
+    .display = {
+      .exposure = 0.4f,
+    },
     .sun = {
       .tint = {1.0f, 0.95f, 0.85f},
       .irradiance = 12.0f,
@@ -739,7 +741,7 @@ auto main() -> int {
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, width), rt_desc.width);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, height), rt_desc.height);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, sample_count), ctx.sample_count);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, exposure), std::bit_cast<UINT>(kExposure));
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, exposure), std::bit_cast<UINT>(settings.display.exposure));
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;

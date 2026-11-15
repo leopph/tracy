@@ -32,7 +32,13 @@ struct MaterialSettings {
 };
 
 
+struct DisplaySettings {
+  float exposure;
+};
+
+
 struct RenderSettings {
+  DisplaySettings display;
   SunSettings sun;
   SkySettings sky;
   std::uint32_t max_bounces;

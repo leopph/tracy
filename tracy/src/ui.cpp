@@ -20,6 +20,11 @@ auto DrawSettingsUi(RenderSettings& settings, RenderStats const& stats) -> UiDra
   ImGui::Text("Frame: %.2f ms (%.0f spp/s)", 1000.0f / io.Framerate, io.Framerate);
   ImGui::Separator();
 
+  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::SliderFloat("Exposure", &settings.display.exposure, 0.01f, 10.0f, "%.3f",
+      ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
+  }
+
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushID("Sun");
     auto& sun = settings.sun;
