@@ -40,6 +40,11 @@ void OnbDuff(float3 const normal, out float3 tangent, out float3 bitangent) {
 }
 
 
+float Luminance(float3 const color) {
+  return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+
 [numthreads(COMPUTE_SHADER_TILE_DIM, COMPUTE_SHADER_TILE_DIM, 1)]
 void main(uint3 const dtid : SV_DispatchThreadID) {
   if (dtid.x >= g_params.width || dtid.y >= g_params.height) {
@@ -184,15 +189,26 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
         OnbDuff(normal_ws, tanget_ws, bitangent_ws);
         float3x3 const tangent_to_world = float3x3(tanget_ws, bitangent_ws, normal_ws);
 
-        float3 const view_ws = -q.WorldRayDirection();
+        float3 const view_ws = normalize(-q.WorldRayDirection());
         float3 const view_ts = mul(tangent_to_world, view_ws);
+        float3 const n_ts = float3(0, 0, 1);
+        float const n_dot_v = saturate(dot(n_ts, view_ts));
         float3 l_ts;
+
+        // Prevent extreme grazing angles
+        if (view_ts.z <= 0) {
+          run_ray_loop = false;
+          break;
+        }
 
         // Random numbers
         uint4 const pcg = pcg4d(uint4(dtid.xy, g_params.sample_count, bounce));
 
-        // 50 percent chance to trace a specular ray, 50 to trace a diffuse one
-        float const p_spec = 0.5;
+        // Sample specular with some probability based on an estimation of Fresnel
+        float3 const f_est = FresnelSchlick(n_dot_v, F0);
+        float const w_spec = Luminance(f_est);
+        float const w_diff = Luminance((1 - f_est) * diffuse_albedo);
+        float const p_spec = max(w_spec / (w_spec + w_diff), 0.05);
 
         if (UintToFloat(pcg.w) < p_spec) {
           // Specular
@@ -203,17 +219,14 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
           l_ts = SampleCosineMalley(UintToFloat(pcg.x), UintToFloat(pcg.y));
         }
 
-        float3 const n_ts = float3(0, 0, 1);
-
-        // If we sampled a reflection direction on the other side of the triangle, end the path
-        if (dot(n_ts, l_ts) <= 0) {
+        // If we sampled a light direction on the other side of the triangle, end the path
+        if (l_ts.z <= 0) {
           run_ray_loop = false;
           break;
         }
 
         float3 const h = normalize(view_ts + l_ts);
         float const n_dot_h = saturate(dot(n_ts, h));
-        float const n_dot_v = saturate(dot(n_ts, view_ts));
         float const n_dot_l = saturate(dot(n_ts, l_ts));
         float const v_dot_h = saturate(dot(view_ts, h));
 
@@ -233,13 +246,20 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
         float const pdf_diff = MalleyPdf(l_ts);
         // Density with which this bounce picks l overall
         float const pdf = p_spec * pdf_spec + (1 - p_spec) * pdf_diff;
+
+        // Prevent pdf == 0 or NaN cases due to error
+        if (!(pdf > 0)) {
+          run_ray_loop = false;
+          break;
+        }
+
         throughput *= f * n_dot_l / pdf;
 
         // Russian roulette: end the path with some probability based on throughput.
         // Skipped for the first bounces, which carry most of the energy.
 
         if (g_params.rr_enabled && bounce >= g_params.rr_start_bounce) {
-          float const survival = max(max(max(throughput.r, throughput.g), throughput.b), 0.05);
+          float const survival = clamp(max(max(throughput.r, throughput.g), throughput.b), 0.05, 1.0);
 
           if (UintToFloat(pcg.z) >= survival) {
             run_ray_loop = false;
