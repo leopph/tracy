@@ -1,22 +1,33 @@
 #include <bit>
+#include <cmath>
 #include <cstdint>
+#include <memory>
 
 #include <DirectXMath.h>
+#include <imgui.h>
+#include <imgui_impl_win32.h>
 #include <wand/wand.hpp>
 
-#include "shader_interop.h"
+#include "imgui_renderer.hpp"
+#include "render_settings.hpp"
+#include "ui.hpp"
+#include "shaders/shader_interop.h"
 
 #ifndef NDEBUG
-#include "generated/Debug/resolve.h"
-#include "generated/Debug/shader_lib.h"
-#include "generated/Debug/tracer.h"
+#include "shaders/generated/Debug/resolve_cs.h"
+#include "shaders/generated/Debug/rt_lib.h"
+#include "shaders/generated/Debug/tracer_cs.h"
 #else
-#include "generated/Release/resolve.h"
-#include "generated/Release/shader_lib.h"
-#include "generated/Release/tracer.h"
+#include "shaders/generated/Release/resolve_cs.h"
+#include "shaders/generated/Release/rt_lib.h"
+#include "shaders/generated/Release/tracer_cs.h"
 #endif
 
 import std;
+
+
+// ReSharper disable once CppEnforceFunctionDeclarationStyle
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 
 extern "C" {
@@ -144,6 +155,10 @@ auto UpdateTransforms(D3D12_RAYTRACING_INSTANCE_DESC* const instance_data) -> vo
 
 
 auto WINAPI WndProc(HWND const hwnd, UINT const msg, WPARAM const wparam, LPARAM const lparam) -> LRESULT {
+  if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) {
+    return true;
+  }
+
   switch (msg) {
     case WM_CLOSE: {
       PostQuitMessage(0);
@@ -192,7 +207,8 @@ auto main() -> int {
 
   ctx.swap_chain = ctx.device->CreateSwapChain(
     wand::SwapChainDesc{
-      .width = 0, .height = 0, .buffer_count = 2, .format = DXGI_FORMAT_R8G8B8A8_UNORM, .usage = 0,
+      .width = 0, .height = 0, .buffer_count = 2, .format = DXGI_FORMAT_R8G8B8A8_UNORM,
+      .usage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
       .scaling = DXGI_SCALING_NONE
     }, hwnd.get());
 
@@ -202,6 +218,31 @@ auto main() -> int {
 
   // Force a resize to create render target
   Resize(hwnd.get());
+
+  // Init ImGui
+
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGui::StyleColorsDark();
+  ImGui_ImplWin32_Init(hwnd.get());
+
+  ImGuiRenderer imgui_renderer{*ctx.device, *ctx.swap_chain};
+
+  tracy::RenderSettings settings{
+    .sun = {
+      .tint = {1.0f, 0.95f, 0.85f},
+      .irradiance = 12.0f,
+      .radius = DirectX::XMConvertToRadians(10.0f),
+      .elevation = DirectX::XMConvertToRadians(35.26f),
+      .azimuth = DirectX::XMConvertToRadians(45.0f),
+    },
+    .sky = {
+      .zenith_tint = {0.3f, 0.5f, 1.0f},
+      .horizon_tint = {1.0f, 1.0f, 1.0f},
+      .radiance = 1.0f,
+    },
+    .max_bounces = 8,
+  };
 
   // Init meshes
 
@@ -450,7 +491,7 @@ auto main() -> int {
   wand::RtStateObjectDesc pso_desc;
 
   auto& lib_desc = pso_desc.AddDxilLibrary();
-  CD3DX12_SHADER_BYTECODE const shader_lib_code{g_shader_lib_bin, std::size(g_shader_lib_bin)};
+  CD3DX12_SHADER_BYTECODE const shader_lib_code{g_rt_lib_bin, std::size(g_rt_lib_bin)};
   lib_desc.SetDXILLibrary(&shader_lib_code);
 
   auto& hit_group_desc = pso_desc.AddHitGroup();
@@ -499,7 +540,7 @@ auto main() -> int {
   // Create resolve PSO
 
   auto const resolve_pso = ctx.device->CreatePipelineState(wand::PipelineDesc{
-    .cs = CD3DX12_SHADER_BYTECODE{g_resolve_bin, std::size(g_resolve_bin)}
+    .cs = CD3DX12_SHADER_BYTECODE{g_resolve_cs_bin, std::size(g_resolve_cs_bin)}
   }, sizeof(ResolveParams) / 4);
 
   // Create fence for frame synchronization
@@ -513,6 +554,8 @@ auto main() -> int {
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
       if (msg.message == WM_QUIT) {
         ctx.device->WaitIdle();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
         SetWindowLongPtrW(hwnd.get(), GWLP_USERDATA, 0);
         return 0;
       }
@@ -520,6 +563,17 @@ auto main() -> int {
       TranslateMessage(&msg);
       DispatchMessageW(&msg);
     }
+
+    // UI. Runs before recording so that a settings change resets accumulation in this same frame.
+
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    if (tracy::DrawSettingsUi(settings).reset_accumulation) {
+      ctx.reset_requested = true;
+    }
+
+    ImGui::Render();
 
     auto const frame_idx = frame_count % kNumFramesInFlight;
 
@@ -564,6 +618,15 @@ auto main() -> int {
     auto const rt_desc = ctx.accum_tex->GetDesc();
 
     if constexpr (kUseRayQuery) {
+      auto const as_uints = [](auto&& arr) {
+        auto constexpr element_count = sizeof(arr) / 4;
+        return std::span{std::start_lifetime_as_array<UINT const>(&arr, element_count), element_count};
+      };
+
+      auto const as_uint = [](auto&& elem) {
+        return std::bit_cast<UINT const>(elem);
+      };
+
       cmd.SetPipelineState(*cs_pso);
       cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(ComputeDispatchParams, as_srv), *tlas);
       cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ComputeDispatchParams, target_uav), *ctx.accum_tex);
@@ -573,6 +636,27 @@ auto main() -> int {
       cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, geom_table_srv), *geom_table_buf);
       cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, mtl_table_srv), *mtl_table_buf);
       cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sample_count), ctx.sample_count);
+      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sky_zenith_tint),
+        as_uints(settings.sky.zenith_tint));
+      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sky_horizon_tint),
+        as_uints(settings.sky.horizon_tint));
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sky_radiance),
+        as_uint(settings.sky.radiance));
+
+      auto const cos_elevation = std::cos(settings.sun.elevation);
+      auto const sun_dir = std::array{
+        cos_elevation * std::cos(settings.sun.azimuth),
+        std::sin(settings.sun.elevation),
+        cos_elevation * std::sin(settings.sun.azimuth)
+      };
+      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, dir_to_sun), as_uints(sun_dir));
+      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_tint), as_uints(settings.sun.tint));
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_irradiance),
+        as_uint(settings.sun.irradiance));
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_radius_cos),
+        as_uint(std::cos(settings.sun.radius)));
+      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, max_bounces), settings.max_bounces);
+
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
@@ -623,6 +707,10 @@ auto main() -> int {
 
       cmd.CopyTexture(ctx.swap_chain->GetCurrentTexture(), *ctx.resolve_tex);
     }
+
+    // UI pass, drawn over the resolved image
+
+    imgui_renderer.Record(cmd, frame_idx);
 
     cmd.End();
     ctx.device->ExecuteCommandLists(std::span{&cmd, 1});

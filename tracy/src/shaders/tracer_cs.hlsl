@@ -5,26 +5,17 @@
 ConstantBuffer<ComputeDispatchParams> g_params : register(b0);
 
 static float3 const cam_pos_ws = float3(0, 1.5, -7);
-static float3 const sky_zenith_tint = float3(0.3, 0.5, 1.0);
-static float3 const sky_horizon_tint = float3(1, 1, 1);
-static float const sky_radiance = 1;
-static float3 const dir_to_sun = normalize(float3(1, 1, 1));
-static float3 const sun_tint = float3(1.0, 0.95, 0.85);
-static float const sun_irradiance = 12;
-static float const sun_radius_rad = 0.1745;
-static uint const kMaxBounces = 8;
 static float const PI = 3.14159265359f;
 
 
 float3 SampleSkyRadiance(float3 const ray_dir) {
-  float const sun_radius_cos = cos(sun_radius_rad);
   // The solid angle of the sun disk in steradians (sr)
-  float const sun_solid_angle = 2 * PI * (1 - sun_radius_cos);
-  float const sun_cutoff = dot(ray_dir, dir_to_sun) > sun_radius_cos;
-  float const sun_radiance = sun_irradiance / sun_solid_angle;
-  float3 const sun = sun_radiance * sun_tint * sun_cutoff;
-  float3 const sky_tint = lerp(sky_horizon_tint, sky_zenith_tint, saturate(ray_dir.y));
-  float3 const atmos = sky_radiance * sky_tint;
+  float const sun_solid_angle = 2 * PI * (1 - g_params.sun_radius_cos);
+  float const sun_cutoff = dot(ray_dir, g_params.dir_to_sun) > g_params.sun_radius_cos;
+  float const sun_radiance = g_params.sun_irradiance / sun_solid_angle;
+  float3 const sun = sun_radiance * g_params.sun_tint * sun_cutoff;
+  float3 const sky_tint = lerp(g_params.sky_horizon_tint, g_params.sky_zenith_tint, saturate(ray_dir.y));
+  float3 const atmos = g_params.sky_radiance * sky_tint;
   return sun + atmos;
 }
 
@@ -107,7 +98,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
   bool run_ray_loop = true;
 
-  for (uint bounce = 0; run_ray_loop && bounce < kMaxBounces; ++bounce) {
+  for (uint bounce = 0; run_ray_loop && bounce <= g_params.max_bounces; ++bounce) {
     q.Proceed(); // Forcing opaque so single call is enough
 
     switch (q.CommittedStatus()) {

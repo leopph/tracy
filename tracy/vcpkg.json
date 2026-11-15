@@ -4,10 +4,14 @@
   "dependencies": [
     {
       "name": "imgui",
+      "version>=": "1.93.0",
       "features": [
-        "dx12-binding",
         "win32-binding"
       ]
+    },
+    {
+      "name": "directxmath",
+      "version>=": "2026-06-12"
     }
   ]
 }

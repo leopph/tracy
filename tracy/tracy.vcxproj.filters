@@ -18,20 +18,37 @@
     <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\imgui_renderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="src\shader_lib.hlsl" />
-    <FxCompile Include="src\tracer.hlsl" />
-    <FxCompile Include="src\resolve.hlsl" />
+    <FxCompile Include="src\shaders\rt_lib.hlsl" />
+    <FxCompile Include="src\shaders\tracer_cs.hlsl" />
+    <FxCompile Include="src\shaders\resolve_cs.hlsl" />
+    <FxCompile Include="src\shaders\imgui_ps.hlsl" />
+    <FxCompile Include="src\shaders\imgui_vs.hlsl" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="vcpkg.json" />
     <None Include="packages.config" />
-    <None Include="src\pcg4d.hlsli" />
-    <None Include="src\utility.hlsli" />
+    <None Include="src\shaders\pcg4d.hlsli" />
+    <None Include="src\shaders\utility.hlsli" />
+    <None Include="src\shaders\imgui.hlsli" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\shader_interop.h">
+    <ClInclude Include="src\shaders\shader_interop.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\imgui_renderer.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\render_settings.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

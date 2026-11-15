@@ -66,6 +66,8 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
+      <AdditionalIncludeDirectories>
+      </AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -74,10 +76,8 @@
     </Link>
     <FxCompile>
       <ShaderModel>6.6</ShaderModel>
-      <VariableName>
-      </VariableName>
-      <HeaderFileOutput>
-      </HeaderFileOutput>
+      <VariableName>g_%(Filename)_bin</VariableName>
+      <HeaderFileOutput>$(ProjectDir)src\shaders\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
       <ObjectFileOutput />
       <AdditionalOptions>/Qembed_debug -Wall %(AdditionalOptions)</AdditionalOptions>
       <TreatWarningAsError>true</TreatWarningAsError>
@@ -93,6 +93,8 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <ScanSourceForModuleDependencies>true</ScanSourceForModuleDependencies>
+      <AdditionalIncludeDirectories>
+      </AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -101,49 +103,49 @@
     </Link>
     <FxCompile>
       <ShaderModel>6.6</ShaderModel>
-      <VariableName>
-      </VariableName>
-      <HeaderFileOutput>
-      </HeaderFileOutput>
+      <VariableName>g_%(Filename)_bin</VariableName>
+      <HeaderFileOutput>$(ProjectDir)src\shaders\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
       <ObjectFileOutput />
       <TreatWarningAsError>true</TreatWarningAsError>
-      <AdditionalOptions>/Qembed_debug -Wall %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>-Wall %(AdditionalOptions)</AdditionalOptions>
     </FxCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\imgui_renderer.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\ui.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="src\resolve.hlsl">
+    <FxCompile Include="src\shaders\imgui_ps.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">PsMain</EntryPointName>
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">PsMain</EntryPointName>
+    </FxCompile>
+    <FxCompile Include="src\shaders\imgui_vs.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">VsMain</EntryPointName>
+      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">VsMain</EntryPointName>
+    </FxCompile>
+    <FxCompile Include="src\shaders\resolve_cs.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_resolve_bin</VariableName>
-      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_resolve_bin</VariableName>
-      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
-      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
     </FxCompile>
-    <FxCompile Include="src\tracer.hlsl">
+    <FxCompile Include="src\shaders\tracer_cs.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
-      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
-      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_tracer_cs_bin</VariableName>
-      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_tracer_cs_bin</VariableName>
     </FxCompile>
-    <FxCompile Include="src\shader_lib.hlsl">
+    <FxCompile Include="src\shaders\rt_lib.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Library</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Library</ShaderType>
-      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_shader_lib_bin</VariableName>
-      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_shader_lib_bin</VariableName>
-      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
-      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(ProjectDir)src\generated\$(Configuration)\%(Filename).h</HeaderFileOutput>
     </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
-    <None Include="src\pcg4d.hlsli" />
-    <None Include="src\utility.hlsli" />
-    <None Include="vcpkg.json" />
+    <None Include="src\shaders\imgui.hlsli" />
+    <None Include="src\shaders\pcg4d.hlsli" />
+    <None Include="src\shaders\utility.hlsli" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\deps\wand\wand\wand.vcxproj">
@@ -151,7 +153,10 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\shader_interop.h" />
+    <ClInclude Include="src\imgui_renderer.hpp" />
+    <ClInclude Include="src\render_settings.hpp" />
+    <ClInclude Include="src\shaders\shader_interop.h" />
+    <ClInclude Include="src\ui.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -9,8 +9,12 @@
 #define uint std::uint32_t
 #define BOOL std::uint32_t
 #define float3 std::array<float, 3>
+#define float2 std::array<float, 2>
+#define float4x4 std::array<std::array<float, 4>, 4>
 
 #define PipelineParamIdx(StructureType, ParamName) offsetof(StructureType, member) / 4
+
+#define row_major
 #else
 #define BOOL bool
 #endif
@@ -20,10 +24,23 @@ struct ComputeDispatchParams {
   uint target_uav;
   uint width;
   uint height;
+
   uint inst_table_srv;
   uint geom_table_srv;
   uint mtl_table_srv;
   uint sample_count;
+
+  float3 sky_zenith_tint;
+  float sky_radiance;
+
+  float3 sky_horizon_tint;
+  uint max_bounces;
+
+  float3 dir_to_sun;
+  float sun_irradiance;
+
+  float3 sun_tint;
+  float sun_radius_cos;
 };
 
 
@@ -62,6 +79,23 @@ struct GpuMaterial {
 };
 
 
+// This should match ImDrawVert
+struct ImGuiVertexData {
+  float2 pos_os;
+  float2 uv;
+  uint col;
+};
+
+
+struct ImGuiDrawParams {
+  row_major float4x4 proj_mtx;
+  uint vb_idx;
+  uint tex_idx;
+  uint samp_idx;
+};
+
+
 #define COMPUTE_SHADER_TILE_DIM 8
+#define INVALID_RES_IDX ((uint)-1)
 
 #endif
