@@ -549,6 +549,7 @@ auto main() -> int {
   // Main loop
 
   UINT frame_count{0};
+  auto accumulation_seconds = 0.0f;
 
   for (MSG msg;;) {
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -569,7 +570,11 @@ auto main() -> int {
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    if (tracy::DrawSettingsUi(settings).reset_accumulation) {
+    accumulation_seconds += ImGui::GetIO().DeltaTime;
+
+    if (tracy::DrawSettingsUi(settings, tracy::RenderStats{
+      .sample_count = ctx.sample_count, .accumulation_seconds = accumulation_seconds
+    }).reset_accumulation) {
       ctx.reset_requested = true;
     }
 
@@ -585,6 +590,7 @@ auto main() -> int {
     if (ctx.reset_requested) {
       cmd.ClearRenderTarget(*ctx.accum_tex, std::array{0.0f, 0.0f, 0.0f, 1.0f}, {});
       ctx.sample_count = 0;
+      accumulation_seconds = 0.0f;
       ctx.reset_requested = false;
     }
 

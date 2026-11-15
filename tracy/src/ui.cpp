@@ -6,12 +6,19 @@
 
 
 namespace tracy {
-auto DrawSettingsUi(RenderSettings& settings) -> UiDrawResult {
+auto DrawSettingsUi(RenderSettings& settings, RenderStats const& stats) -> UiDrawResult {
   auto changed = false;
 
   ImGui::SetNextWindowSize({360, 0}, ImGuiCond_FirstUseEver);
 
   ImGui::Begin("Settings");
+
+  // Stats. One sample per pixel is accumulated per frame, so the frame rate is also samples per second.
+  auto const& io = ImGui::GetIO();
+  ImGui::Text("Samples: %u", stats.sample_count);
+  ImGui::Text("Time: %.1f s", stats.accumulation_seconds);
+  ImGui::Text("Frame: %.2f ms (%.0f spp/s)", 1000.0f / io.Framerate, io.Framerate);
+  ImGui::Separator();
 
   if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
     ImGui::PushID("Sun");
