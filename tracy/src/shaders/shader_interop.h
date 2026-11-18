@@ -6,11 +6,13 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <DirectXMath.h>
+
 #define uint std::uint32_t
 #define BOOL std::uint32_t
 #define float3 std::array<float, 3>
 #define float2 std::array<float, 2>
-#define float4x4 std::array<std::array<float, 4>, 4>
+#define float4x4 DirectX::XMFLOAT4X4A
 
 #define PipelineParamIdx(StructureType, ParamName) offsetof(StructureType, member) / 4
 

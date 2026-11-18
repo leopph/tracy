@@ -666,20 +666,6 @@ auto main() -> int {
       };
 
       cmd.SetPipelineState(*cs_pso);
-      cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(ComputeDispatchParams, as_srv), *tlas);
-      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ComputeDispatchParams, target_uav), *ctx.accum_tex);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, width), rt_desc.width);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, height), rt_desc.height);
-      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, inst_table_srv), *inst_table_buf);
-      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, geom_table_srv), *geom_table_buf);
-      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ComputeDispatchParams, mtl_table_srv), *mtl_table_buf);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sample_count), ctx.sample_count);
-      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sky_zenith_tint),
-        as_uints(settings.sky.zenith_tint));
-      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sky_horizon_tint),
-        as_uints(settings.sky.horizon_tint));
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sky_radiance),
-        as_uint(settings.sky.radiance));
 
       auto const cos_elevation = std::cos(settings.sun.elevation);
       auto const sun_dir = std::array{
@@ -687,26 +673,37 @@ auto main() -> int {
         std::sin(settings.sun.elevation),
         cos_elevation * std::sin(settings.sun.azimuth)
       };
-      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, dir_to_sun), as_uints(sun_dir));
-      cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_tint), as_uints(settings.sun.tint));
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_irradiance),
-        as_uint(settings.sun.irradiance));
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, sun_radius_cos),
-        as_uint(std::cos(settings.sun.radius)));
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, max_bounces), settings.max_bounces);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, rr_start_bounce),
-        settings.rr_start_bounce);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ComputeDispatchParams, rr_enabled),
-        settings.rr_enabled ? 1u : 0u);
 
+      cmd.SetPipelineParameter(wand::ParamField<ComputeDispatchParams>{}, {
+        .as_srv = cmd.ReferenceAccelerationStructure(*tlas),
+        .target_uav = cmd.ReferenceUnorderedAccess(*ctx.accum_tex),
+        .width = rt_desc.width,
+        .height = rt_desc.height,
+        .inst_table_srv = cmd.ReferenceShaderResource(*inst_table_buf),
+        .geom_table_srv = cmd.ReferenceShaderResource(*geom_table_buf),
+        .mtl_table_srv = cmd.ReferenceShaderResource(*mtl_table_buf),
+        .sample_count = ctx.sample_count,
+        .sky_zenith_tint = settings.sky.zenith_tint,
+        .sky_radiance = settings.sky.radiance,
+        .sky_horizon_tint = settings.sky.horizon_tint,
+        .max_bounces = settings.max_bounces,
+        .dir_to_sun = sun_dir,
+        .sun_irradiance = settings.sun.irradiance,
+        .sun_tint = settings.sun.tint,
+        .sun_radius_cos = std::cos(settings.sun.radius),
+        .rr_start_bounce = settings.rr_start_bounce,
+        .rr_enabled = settings.rr_enabled ? 1u : 0u
+      });
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       cmd.Dispatch(dispatch_x, dispatch_y, 1);
     } else {
       cmd.SetRtState(*pso);
-      cmd.SetAccelerationStructure(PIPELINE_PARAM_INDEX(RayDispatchParams, tlas_idx), *tlas);
-      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(RayDispatchParams, uav_idx), *ctx.accum_tex);
+      cmd.SetPipelineParameter(wand::ParamField<RayDispatchParams>{}, {
+        .tlas_idx = cmd.ReferenceAccelerationStructure(*tlas),
+        .uav_idx = cmd.ReferenceUnorderedAccess(*ctx.accum_tex)
+      });
 
       cmd.DispatchRays(wand::DispatchRaysDesc{
         .ray_generation_shader_record = wand::BufferRange{
@@ -736,12 +733,14 @@ auto main() -> int {
     // Resolve pass
     {
       cmd.SetPipelineState(*resolve_pso);
-      cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ResolveParams, accum_srv), *ctx.accum_tex);
-      cmd.SetUnorderedAccess(PIPELINE_PARAM_INDEX(ResolveParams, target_uav), *ctx.resolve_tex);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, width), rt_desc.width);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, height), rt_desc.height);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, sample_count), ctx.sample_count);
-      cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ResolveParams, exposure), std::bit_cast<UINT>(settings.display.exposure));
+      cmd.SetPipelineParameter(wand::ParamField<ResolveParams>{}, {
+        .accum_srv = cmd.ReferenceShaderResource(*ctx.accum_tex),
+        .sample_count = ctx.sample_count,
+        .target_uav = cmd.ReferenceUnorderedAccess(*ctx.resolve_tex),
+        .width = rt_desc.width,
+        .height = rt_desc.height,
+        .exposure = settings.display.exposure
+      });
 
       auto const dispatch_x = (rt_desc.width + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;
       auto const dispatch_y = (rt_desc.height + COMPUTE_SHADER_TILE_DIM - 1) / COMPUTE_SHADER_TILE_DIM;

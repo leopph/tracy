@@ -214,8 +214,8 @@ auto ImGuiRenderer::Record(wand::CommandList& cmd, std::uint32_t const frame_idx
 
   auto const& rt = swap_chain_->GetCurrentTexture();
 
-  auto proj_mtx = DirectX::XMFLOAT4X4{};
-  DirectX::XMStoreFloat4x4(&proj_mtx, DirectX::XMMatrixOrthographicOffCenterLH(draw_data.display_pos.x,
+  auto proj_mtx = DirectX::XMFLOAT4X4A{};
+  DirectX::XMStoreFloat4x4A(&proj_mtx, DirectX::XMMatrixOrthographicOffCenterLH(draw_data.display_pos.x,
     // ImGui's y axis points down, so bottom is pos.y + size.y and top is pos.y
     draw_data.display_pos.x + draw_data.display_size.x, draw_data.display_pos.y + draw_data.display_size.y,
     draw_data.display_pos.y, -1, 1));
@@ -224,10 +224,9 @@ auto ImGuiRenderer::Record(wand::CommandList& cmd, std::uint32_t const frame_idx
 
   cmd.SetBlendFactor(std::array{0.f, 0.f, 0.f, 0.f});
   cmd.SetIndexBuffer(*ib, idx_format);
-  cmd.SetPipelineParameters(PIPELINE_PARAM_INDEX(ImGuiDrawParams, proj_mtx),
-    std::span{std::start_lifetime_as_array<UINT const>(&proj_mtx.m, 16), 16});
-  cmd.SetPipelineParameter(PIPELINE_PARAM_INDEX(ImGuiDrawParams, samp_idx), samp_.Get());
-  cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ImGuiDrawParams, vb_idx), *vb);
+  cmd.SetPipelineParameter(WAND_PARAM(ImGuiDrawParams, proj_mtx), proj_mtx);
+  cmd.SetPipelineParameter(WAND_PARAM(ImGuiDrawParams, samp_idx), samp_.Get());
+  cmd.SetShaderResource(WAND_PARAM(ImGuiDrawParams, vb_idx), *vb);
   cmd.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   cmd.SetRenderTargets(std::span{std::array{(&rt)}.data(), 1}, nullptr);
   cmd.SetViewports(std::array<D3D12_VIEWPORT, 1>{
@@ -272,7 +271,7 @@ auto ImGuiRenderer::Record(wand::CommandList& cmd, std::uint32_t const frame_idx
         });
 
         // Only the font atlas is supported for now
-        cmd.SetShaderResource(PIPELINE_PARAM_INDEX(ImGuiDrawParams, tex_idx), *draw_data.font_tex);
+        cmd.SetShaderResource(WAND_PARAM(ImGuiDrawParams, tex_idx), *draw_data.font_tex);
 
         cmd.DrawIndexedInstanced(draw_cmd.ElemCount, 1, draw_cmd.IdxOffset + global_idx_offset,
           draw_cmd.VtxOffset + global_vtx_offset, 0);
