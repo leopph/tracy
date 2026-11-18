@@ -656,15 +656,6 @@ auto main() -> int {
     auto const rt_desc = ctx.accum_tex->GetDesc();
 
     if constexpr (kUseRayQuery) {
-      auto const as_uints = [](auto&& arr) {
-        auto constexpr element_count = sizeof(arr) / 4;
-        return std::span{std::start_lifetime_as_array<UINT const>(&arr, element_count), element_count};
-      };
-
-      auto const as_uint = [](auto&& elem) {
-        return std::bit_cast<UINT const>(elem);
-      };
-
       cmd.SetPipelineState(*cs_pso);
 
       auto const cos_elevation = std::cos(settings.sun.elevation);
