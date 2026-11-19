@@ -131,7 +131,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
 
         GpuGeometry const geom = geometries[inst.geom_idx];
 
-        StructuredBuffer<uint> const indices = ResourceDescriptorHeap[geom.idx_buf_srv];
+        StructuredBuffer<uint> const indices = ResourceDescriptorHeap[NonUniformResourceIndex(geom.idx_buf_srv)];
         uint index_count;
         uint index_stride;
         indices.GetDimensions(index_count, index_stride);
@@ -148,7 +148,7 @@ void main(uint3 const dtid : SV_DispatchThreadID) {
         uint3 const prim_indices = uint3(indices[index_positions.x], indices[index_positions.y],
           indices[index_positions.z]);
 
-        StructuredBuffer<float3> const vertices = ResourceDescriptorHeap[geom.vtx_buf_srv];
+        StructuredBuffer<float3> const vertices = ResourceDescriptorHeap[NonUniformResourceIndex(geom.vtx_buf_srv)];
         uint vertex_count;
         uint vertex_stride;
         vertices.GetDimensions(vertex_count, vertex_stride);
