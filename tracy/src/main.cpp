@@ -1,3 +1,4 @@
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -325,7 +326,7 @@ auto main() -> int {
     ctx.cmd_lists[0]->BuildAccelerationStructure(build_desc);
     ctx.cmd_lists[0]->End();
 
-    ctx.device->ExecuteCommandLists(std::span{ctx.cmd_lists[0].get(), 1});
+    ctx.device->SubmitCommandLists(std::array{ctx.cmd_lists[0].get()});
     ctx.device->WaitIdle();
 
     return as;
@@ -745,7 +746,7 @@ auto main() -> int {
     imgui_renderer.Record(cmd, frame_idx);
 
     cmd.End();
-    ctx.device->ExecuteCommandLists(std::span{&cmd, 1});
+    ctx.device->SubmitCommandLists(std::array{&cmd});
 
     ctx.device->Present(*ctx.swap_chain);
 
