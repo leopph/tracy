@@ -152,6 +152,7 @@ auto ImGuiRenderer::Record(wand::CommandList& cmd, std::uint32_t const frame_idx
     upload_buf->Unmap();
 
     cmd.CopyTextureRegion(*font_tex_, 0, 0, 0, 0, *upload_buf, footprint);
+    cmd.Seal(*font_tex_);
 
     fonts_dirty_ = false;
   }
