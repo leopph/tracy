@@ -200,12 +200,31 @@ auto main() -> int {
   SetWindowLongPtrW(hwnd.get(), GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&ctx));
 
 #ifndef NDEBUG
-  constexpr auto enable_debug = true;
+  constexpr auto debug_level = wand::DeviceDebugLevel::kApi;
 #else
-  constexpr auto enable_debug = false;
+  constexpr auto debug_level = wand::DeviceDebugLevel::kNone;
 #endif
 
-  ctx.device = std::make_unique<wand::GraphicsDevice>(enable_debug, false);
+  auto device = wand::GraphicsDevice::Create(debug_level, wand::DeviceType::kHardware);
+
+  if (!device) {
+    auto const msg = [&] {
+      switch (device.error()) {
+        case wand::DeviceError::kNoResourceBindingTier3:
+          return L"Resource Binding Tier 3 is required but not supported.";
+        case wand::DeviceError::kNoShaderModel66:
+          return L"Shader Model 6.6 is required but not supported.";
+        case wand::DeviceError::kNoEnhancedBarriers:
+          return L"Enhanced barriers are required but not supported.";
+      }
+      return L"Failed to create the graphics device.";
+    }();
+
+    MessageBoxW(nullptr, msg, L"Error", MB_ICONERROR);
+    return EXIT_FAILURE;
+  }
+
+  ctx.device = std::move(*device);
 
   if (!ctx.device->GetCapabilities().SupportsInlineRaytracing()) {
     MessageBoxW(nullptr, L"Inline raytracing is not supported!", L"Error", MB_ICONERROR);
