@@ -2,6 +2,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <ranges>
 
@@ -205,6 +206,11 @@ auto main() -> int {
 #endif
 
   ctx.device = std::make_unique<wand::GraphicsDevice>(enable_debug, false);
+
+  if (!ctx.device->GetCapabilities().SupportsInlineRaytracing()) {
+    MessageBoxW(nullptr, L"Inline raytracing is not supported!", L"Error", MB_ICONERROR);
+    return EXIT_FAILURE;
+  }
 
   ctx.swap_chain = ctx.device->CreateSwapChain(
     wand::SwapChainDesc{
